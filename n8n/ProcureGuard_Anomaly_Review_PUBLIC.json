@@ -1,0 +1,727 @@
+{
+  "name": "ProcureGuard AI - Anomaly Review",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "ProcureGuard AI - Anomaly Review",
+        "formDescription": "Review a procurement anomaly and record the appropriate decision.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Anomaly ID",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "CONFIRM"
+                  },
+                  {
+                    "option": "DISMISS"
+                  },
+                  {
+                    "option": "RESOLVE"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Review Notes",
+              "fieldType": "textarea",
+              "placeholder": "Explain the reason for this decision...",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit"
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -240,
+        -240
+      ],
+      "id": "1695230b-a6f8-4b55-a7a8-804fededf81e",
+      "name": "Form - Anomaly Review Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    a.id AS anomaly_id,\n    a.organization_id,\n    a.invoice_id,\n    a.invoice_item_id,\n    a.supplier_id,\n    a.product_id,\n    a.purchase_order_id,\n\n    a.anomaly_type,\n    a.severity,\n    a.status AS anomaly_status,\n\n    a.expected_value,\n    a.actual_value,\n    a.variance_amount,\n    a.variance_percent,\n    a.estimated_financial_impact,\n\n    a.description,\n    a.evidence,\n    a.detected_at,\n    a.reviewed_at,\n    a.reviewed_by,\n    a.resolution_notes,\n\n    i.invoice_number,\n    i.invoice_date,\n    i.currency,\n    i.total AS invoice_total,\n    i.processing_status AS invoice_processing_status,\n\n    s.supplier_code,\n    s.supplier_name,\n\n    $2::text AS reviewer_name,\n    UPPER($3::text) AS review_decision,\n    $4::text AS review_notes\n\nFROM public.anomalies a\n\nJOIN public.invoices i\n    ON i.id = a.invoice_id\n   AND i.organization_id = a.organization_id\n\nJOIN public.suppliers s\n    ON s.id = a.supplier_id\n   AND s.organization_id = a.organization_id\n\nWHERE a.id = $1::uuid\n  AND a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json[\"Anomaly ID\"],\n  $json[\"Reviewer Name\"],\n  $json[\"Decision\"],\n  $json[\"Review Notes\"]\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -16,
+        -240
+      ],
+      "id": "3e5850d4-c612-475f-b9fa-425273f69a11",
+      "name": "DB - Get Anomaly Review Context"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "CONFIRM",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "1e372017-2c47-4602-b125-bc6b53a1bf52"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CONFIRM"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7d29dcba-e2e0-443f-8a22-ffdab6bd75b1",
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "DISMISS",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DISMISS"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "f8bb092e-12ed-48fa-8a5e-f335a0e0b9e0",
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "RESOLVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "RESOLVE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        -256
+      ],
+      "id": "3006d611-bd86-4300-80a6-89bc2d8d2861",
+      "name": "Switch - Anomaly Review Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.anomalies\nSET\n    status = 'CONFIRMED',\n    reviewed_at = NOW(),\n    reviewed_by = $2::text,\n    resolution_notes = $3::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $4::uuid\n  AND status IN ('OPEN', 'UNDER_REVIEW')\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status AS anomaly_status,\n    estimated_financial_impact,\n    reviewed_at,\n    reviewed_by,\n    resolution_notes;",
+        "options": {
+          "queryReplacement": "={{ [   $json.anomaly_id,   $json.reviewer_name,   $json.review_notes,   $json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        432,
+        -528
+      ],
+      "id": "11ddb1ee-ea7d-45b7-a6af-3095d510a74c",
+      "name": "DB - Confirm Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'ANOMALY',\n    $2::uuid,\n    'REVIEW',\n    'USER',\n    $3::text,\n    'ANOMALY_REVIEW_FORM',\n\n    'Anomaly \"' || $2::text ||\n    '\" was confirmed by \"' || $3::text ||\n    '\".',\n\n    jsonb_build_object(\n        'status', 'OPEN'\n    ),\n\n    jsonb_build_object(\n        'status', 'CONFIRMED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Anomaly Review',\n        'invoice_id', $4::uuid,\n        'anomaly_type', $5::text,\n        'severity', $6::text,\n        'estimated_financial_impact', $7::numeric,\n        'review_notes', $8::text,\n        'decision', 'CONFIRM'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.anomaly_id,   $json.reviewed_by,   $json.invoice_id,   $json.anomaly_type,   $json.severity,   $json.estimated_financial_impact,   $json.resolution_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        656,
+        -432
+      ],
+      "id": "f465c289-0ee4-4587-83a4-294148c8f265",
+      "name": "DB - Log Anomaly Confirmation"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_status,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n    )::integer AS active_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'OPEN'\n    )::integer AS open_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'UNDER_REVIEW'\n    )::integer AS under_review_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'CONFIRMED'\n    )::integer AS confirmed_count,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ),\n        0\n    )::numeric AS active_financial_impact,\n\n    CASE\n        WHEN COUNT(a.id) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ) > 0\n        THEN 'REVIEW_REQUIRED'\n        ELSE 'PROCESSED'\n    END AS recommended_status\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n   AND a.organization_id = i.organization_id\n\nWHERE i.id = $1::uuid\n  AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [   $json.metadata.invoice_id,   $json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        -432
+      ],
+      "id": "a0297317-e29b-4b90-bd39-1c863625d24a",
+      "name": "DB - Re-Evaluate Invoice After Anomaly Review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH old_invoice AS (\n    SELECT\n        id,\n        organization_id,\n        invoice_number,\n        processing_status AS old_status\n    FROM public.invoices\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n),\nupdated_invoice AS (\n    UPDATE public.invoices\n    SET\n        processing_status = $3::text,\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND processing_status IS DISTINCT FROM $3::text\n    RETURNING\n        id,\n        organization_id,\n        invoice_number,\n        processing_status,\n        updated_at\n)\nSELECT\n    u.id AS invoice_id,\n    u.organization_id,\n    u.invoice_number,\n    o.old_status,\n    u.processing_status AS new_status,\n    u.updated_at\nFROM updated_invoice u\nJOIN old_invoice o\n    ON o.id = u.id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   $json.recommended_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1328,
+        -336
+      ],
+      "id": "7afb01f9-f2d1-42db-8a78-e92abe4c6a41",
+      "name": "DB - Update Invoice Status After Review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.anomalies\nSET\n    status = 'DISMISSED',\n    reviewed_at = NOW(),\n    reviewed_by = $3::text,\n    resolution_notes = $4::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status AS anomaly_status,\n    estimated_financial_impact,\n    reviewed_at,\n    reviewed_by,\n    resolution_notes;",
+        "options": {
+          "queryReplacement": "={{ [   $json.anomaly_id,   $json.organization_id,   $json.reviewer_name,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        432,
+        -240
+      ],
+      "id": "332c9701-ca35-49cf-82cf-b5e755694b45",
+      "name": "DB - Dismiss Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'ANOMALY',\n    $2::uuid,\n    'DISMISS',\n    'USER',\n    $3::text,\n    'ANOMALY_REVIEW_FORM',\n\n    'Anomaly \"' || $2::text ||\n    '\" was dismissed by \"' || $3::text || '\".',\n\n    jsonb_build_object(\n        'status', $4::text\n    ),\n\n    jsonb_build_object(\n        'status', 'DISMISSED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Anomaly Review',\n        'invoice_id', $5::uuid,\n        'anomaly_type', $6::text,\n        'severity', $7::text,\n        'estimated_financial_impact', $8::numeric,\n        'decision', 'DISMISS',\n        'review_notes', $9::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Get Anomaly Review Context').item.json.organization_id,   $('DB - Get Anomaly Review Context').item.json.anomaly_id,   $('DB - Get Anomaly Review Context').item.json.reviewer_name,   $('DB - Get Anomaly Review Context').item.json.anomaly_status,   $('DB - Get Anomaly Review Context').item.json.invoice_id,   $('DB - Get Anomaly Review Context').item.json.anomaly_type,   $('DB - Get Anomaly Review Context').item.json.severity,   $('DB - Get Anomaly Review Context').item.json.estimated_financial_impact,   $('DB - Get Anomaly Review Context').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        656,
+        -240
+      ],
+      "id": "0454ff82-a620-404d-9fd4-beb9b842d5de",
+      "name": "DB - Log Anomaly Dismissal"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_status,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n    )::integer AS active_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'OPEN'\n    )::integer AS open_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'UNDER_REVIEW'\n    )::integer AS under_review_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'CONFIRMED'\n    )::integer AS confirmed_count,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ),\n        0\n    ) AS active_financial_impact,\n\n    CASE\n        WHEN COUNT(a.id) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ) > 0\n        THEN 'REVIEW_REQUIRED'\n        ELSE 'PROCESSED'\n    END AS recommended_status\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n   AND a.organization_id = i.organization_id\n\nWHERE\n    i.id = $1::uuid\n    AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Get Anomaly Review Context').item.json.invoice_id,   $('DB - Get Anomaly Review Context').item.json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        -240
+      ],
+      "id": "0942af5f-ed31-4678-9bc6-e466d3cb8717",
+      "name": "DB - Re-Evaluate Invoice After Dismissal"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'INVOICE',\n    $2::uuid,\n    'STATUS_CHANGE',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'ANOMALY_REVIEW_WORKFLOW',\n\n    'Invoice \"' || $3::text ||\n    '\" status changed from \"' || $4::text ||\n    '\" to \"' || $5::text ||\n    '\" after anomaly review.',\n\n    jsonb_build_object(\n        'processing_status', $4::text\n    ),\n\n    jsonb_build_object(\n        'processing_status', $5::text\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Anomaly Review',\n        'trigger', 'ANOMALY_REVIEW',\n        'review_decision', $6::text,\n        'anomaly_id', $7::uuid,\n        'reviewer_name', $8::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.invoice_id,\n  $json.invoice_number,\n  $json.old_status,\n  $json.new_status,\n  $('DB - Get Anomaly Review Context').item.json.review_decision,\n  $('DB - Get Anomaly Review Context').item.json.anomaly_id,\n  $('DB - Get Anomaly Review Context').item.json.reviewer_name\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1552,
+        -336
+      ],
+      "id": "fefb030a-dd99-4c4c-a866-5969f75c4be4",
+      "name": "DB - Log Invoice Status Change After Review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.anomalies\nSET\n    status = 'RESOLVED',\n    reviewed_at = COALESCE(reviewed_at, NOW()),\n    reviewed_by = $3::text,\n    resolved_at = NOW(),\n    resolution_notes = $4::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status AS anomaly_status,\n    estimated_financial_impact,\n    reviewed_at,\n    resolved_at,\n    reviewed_by,\n    resolution_notes;",
+        "options": {
+          "queryReplacement": "={{ [   $json.anomaly_id,   $json.organization_id,   $json.reviewer_name,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        432,
+        -48
+      ],
+      "id": "144512d1-2279-4392-bbaf-f9fa3e1e776e",
+      "name": "DB - Resolve Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'ANOMALY',\n    $2::uuid,\n    'RESOLVE',\n    'USER',\n    $3::text,\n    'ANOMALY_REVIEW_FORM',\n\n    'Anomaly \"' || $2::text ||\n    '\" was resolved by \"' || $3::text || '\".',\n\n    jsonb_build_object(\n        'status', $4::text\n    ),\n\n    jsonb_build_object(\n        'status', 'RESOLVED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Anomaly Review',\n        'invoice_id', $5::uuid,\n        'anomaly_type', $6::text,\n        'severity', $7::text,\n        'estimated_financial_impact', $8::numeric,\n        'decision', 'RESOLVE',\n        'review_notes', $9::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Get Anomaly Review Context').item.json.organization_id,   $('DB - Get Anomaly Review Context').item.json.anomaly_id,   $('DB - Get Anomaly Review Context').item.json.reviewer_name,   $('DB - Get Anomaly Review Context').item.json.anomaly_status,   $('DB - Get Anomaly Review Context').item.json.invoice_id,   $('DB - Get Anomaly Review Context').item.json.anomaly_type,   $('DB - Get Anomaly Review Context').item.json.severity,   $('DB - Get Anomaly Review Context').item.json.estimated_financial_impact,   $('DB - Get Anomaly Review Context').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        656,
+        -48
+      ],
+      "id": "d9557104-d6e5-43e4-9a79-b262cb2ca11f",
+      "name": "DB - Log Anomaly Resolution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_status,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n    )::integer AS active_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'OPEN'\n    )::integer AS open_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'UNDER_REVIEW'\n    )::integer AS under_review_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'CONFIRMED'\n    )::integer AS confirmed_count,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ),\n        0\n    )::numeric AS active_financial_impact,\n\n    CASE\n        WHEN COUNT(a.id) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ) > 0\n        THEN 'REVIEW_REQUIRED'\n        ELSE 'PROCESSED'\n    END AS recommended_status\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n   AND a.organization_id = i.organization_id\n\nWHERE i.id = $1::uuid\n  AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Get Anomaly Review Context').item.json.invoice_id,   $('DB - Get Anomaly Review Context').item.json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        -48
+      ],
+      "id": "afd874ca-7407-4eb9-b45c-ef7bfc0c1379",
+      "name": "DB - Re-Evaluate Invoice After Resolution"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "562eb9da-a9a0-4679-8d97-8c93cecd6d88",
+              "leftValue": "={{ $json.current_status }}",
+              "rightValue": "={{ $json.recommended_status }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        -48
+      ],
+      "id": "a58ba226-8544-4486-bb9e-5b274d94c8c7",
+      "name": "IF - Invoice Status Change After Resolution?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.invoices\nSET\n    processing_status = $3::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND processing_status IS DISTINCT FROM $3::text\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    invoice_number,\n    processing_status,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   $json.recommended_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1328,
+        -48
+      ],
+      "id": "03b6a0e4-8e61-4e1a-8676-1dbcfe5ab7be",
+      "name": "DB - Update Invoice Status After Resolution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'INVOICE',\n    $2::uuid,\n    'STATUS_CHANGE',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'ANOMALY_REVIEW_WORKFLOW',\n\n    'Invoice \"' || $3::text ||\n    '\" status changed from \"' || $4::text ||\n    '\" to \"' || $5::text ||\n    '\" after anomaly resolution.',\n\n    jsonb_build_object(\n        'processing_status', $4::text\n    ),\n\n    jsonb_build_object(\n        'processing_status', $5::text\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Anomaly Review',\n        'trigger', 'ANOMALY_RESOLUTION',\n        'review_decision', 'RESOLVE',\n        'anomaly_id', $6::uuid,\n        'reviewer_name', $7::text,\n        'active_anomaly_count', $8::integer,\n        'active_financial_impact', $9::numeric\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Update Invoice Status After Resolution').item.json.organization_id,   $('DB - Update Invoice Status After Resolution').item.json.invoice_id,   $('DB - Update Invoice Status After Resolution').item.json.invoice_number,   $('DB - Re-Evaluate Invoice After Resolution').item.json.current_status,   $('DB - Update Invoice Status After Resolution').item.json.processing_status,   $('DB - Get Anomaly Review Context').item.json.anomaly_id,   $('DB - Get Anomaly Review Context').item.json.reviewer_name,   $('DB - Re-Evaluate Invoice After Resolution').item.json.active_anomaly_count,   $('DB - Re-Evaluate Invoice After Resolution').item.json.active_financial_impact ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1552,
+        -48
+      ],
+      "id": "49336edb-76c6-4f90-8e4f-f4a4e8771456",
+      "name": "DB - Log Invoice Status After Resolution"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6ad1a3a2-acdf-4491-87e2-8616bb234be8",
+              "leftValue": "={{ $json.current_status }}",
+              "rightValue": "={{ $json.recommended_status }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        -240
+      ],
+      "id": "b22d417b-37b9-4444-8e3f-ad655eb47af1",
+      "name": "IF - Invoice Status Change After Dismissal?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "68f32788-7352-484f-81c4-657e08d6a0c9",
+              "leftValue": "={{ $json.current_status }}",
+              "rightValue": "={{ $json.recommended_status }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        -432
+      ],
+      "id": "eba305b9-d130-4186-a1de-aabee3494317",
+      "name": "IF - Invoice Status Change After Confirmation?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.approvals (\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    requested_at\n)\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    'SUPPLIER_DISPUTE',\n    'PENDING',\n    $4::text,\n    NOW()\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.approvals existing\n    WHERE existing.organization_id = $1::uuid\n      AND existing.anomaly_id = $2::uuid\n      AND existing.approval_type = 'SUPPLIER_DISPUTE'\n      AND existing.status = 'PENDING'\n)\n\nRETURNING\n    id AS approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    requested_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.anomaly_id,   $json.invoice_id,   $json.reviewed_by ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        656,
+        -624
+      ],
+      "id": "10eb7a1f-4739-4684-8862-fc2f9374e039",
+      "name": "DB - Create Supplier Dispute Approval"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form - Anomaly Review Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Anomaly Review Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Anomaly Review Context": {
+      "main": [
+        [
+          {
+            "node": "Switch - Anomaly Review Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Anomaly Review Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Confirm Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Dismiss Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Resolve Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Confirm Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Anomaly Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Create Supplier Dispute Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Anomaly Confirmation": {
+      "main": [
+        [
+          {
+            "node": "DB - Re-Evaluate Invoice After Anomaly Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Re-Evaluate Invoice After Anomaly Review": {
+      "main": [
+        [
+          {
+            "node": "IF - Invoice Status Change After Confirmation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Dismiss Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Anomaly Dismissal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Anomaly Dismissal": {
+      "main": [
+        [
+          {
+            "node": "DB - Re-Evaluate Invoice After Dismissal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Re-Evaluate Invoice After Dismissal": {
+      "main": [
+        [
+          {
+            "node": "IF - Invoice Status Change After Dismissal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Update Invoice Status After Review": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Invoice Status Change After Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Resolve Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Anomaly Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Anomaly Resolution": {
+      "main": [
+        [
+          {
+            "node": "DB - Re-Evaluate Invoice After Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Re-Evaluate Invoice After Resolution": {
+      "main": [
+        [
+          {
+            "node": "IF - Invoice Status Change After Resolution?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Invoice Status Change After Resolution?": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Invoice Status After Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Update Invoice Status After Resolution": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Invoice Status After Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Invoice Status Change After Dismissal?": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Invoice Status After Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Invoice Status Change After Confirmation?": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Invoice Status After Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Supplier Dispute Approval": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

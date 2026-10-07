@@ -1,0 +1,742 @@
+{
+  "name": "ProcureGuard AI - Supplier Email Recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "ProcureGuard AI - Supplier Email Recovery",
+        "formDescription": "Review a failed supplier email delivery before deciding whether it should be retried or closed.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Processing Error ID",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "RETRY"
+                  },
+                  {
+                    "option": "RESOLVE"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Review Notes",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        224
+      ],
+      "id": "d79d7d58-02f3-495f-a6d7-c95de71c1f9e",
+      "name": "Form - Supplier Email Recovery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    pe.id AS processing_error_id,\n    pe.organization_id,\n    pe.invoice_id,\n    pe.error_stage,\n    pe.error_code,\n    pe.error_message,\n    pe.severity AS error_severity,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n    pe.workflow_name AS failed_workflow_name,\n    pe.workflow_execution_id AS failed_execution_id,\n    pe.occurred_at,\n\n    d.id AS draft_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.supplier_id,\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.sent_at,\n\n    a.status AS email_approval_status,\n    a.decided_by AS email_approved_by,\n    a.decided_at AS email_approved_at,\n\n    s.email AS current_supplier_email,\n\n    $2::text AS reviewer_name,\n    $3::text AS recovery_decision,\n    $4::text AS review_notes\n\nFROM public.processing_errors pe\n\nJOIN public.supplier_dispute_drafts d\n    ON d.id = (pe.context->>'draft_id')::uuid\n   AND d.organization_id = pe.organization_id\n\nJOIN public.approvals a\n    ON a.id = d.email_approval_id\n   AND a.organization_id = d.organization_id\n   AND a.approval_type = 'SUPPLIER_EMAIL'\n\nJOIN public.suppliers s\n    ON s.id = d.supplier_id\n   AND s.organization_id = d.organization_id\n\nWHERE pe.id = $1::uuid\n\n  AND pe.error_stage = 'NOTIFICATION'\n  AND pe.error_code = 'SUPPLIER_EMAIL_SEND_FAILED'\n  AND pe.status = 'OPEN'\n\n  AND d.status = 'FAILED'\n  AND d.sent_at IS NULL\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [   $json['Processing Error ID'],   $json['Reviewer Name'],   $json['Decision'],   $json['Review Notes'] ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        224,
+        224
+      ],
+      "id": "d4f0ab29-be8a-458c-8593-f6d5dba2796b",
+      "name": "DB - Get Failed Supplier Email Recovery Context"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = $json;\n\nlet recoveryStatus = 'READY';\nlet recoveryReason = 'Recovery request passed validation.';\n\n// 1. Processing error must still be OPEN\nif (data.processing_error_status !== 'OPEN') {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Processing error is no longer OPEN.';\n}\n\n// 2. Must be our supplier-email failure\nelse if (\n  data.error_stage !== 'NOTIFICATION' ||\n  data.error_code !== 'SUPPLIER_EMAIL_SEND_FAILED'\n) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Processing error is not a supplier email send failure.';\n}\n\n// 3. Draft must still be FAILED\nelse if (data.draft_status !== 'FAILED') {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = `Draft status is ${data.draft_status}, not FAILED.`;\n}\n\n// 4. Email must not already have a confirmed sent_at\nelse if (data.sent_at !== null && data.sent_at !== undefined) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Draft already contains a sent timestamp.';\n}\n\n// 5. Original human email approval must remain APPROVED\nelse if (data.email_approval_status !== 'APPROVED') {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason =\n    `Email approval status is ${data.email_approval_status}, not APPROVED.`;\n}\n\n// 6. Recipient must still match supplier master data\nelse if (\n  !data.recipient_email ||\n  !data.current_supplier_email ||\n  data.recipient_email.trim().toLowerCase() !==\n    data.current_supplier_email.trim().toLowerCase()\n) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason =\n    'Draft recipient does not match the supplier current email address.';\n}\n\n// 7. Required email content must exist\nelse if (!data.email_subject || !data.email_subject.trim()) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Email subject is missing.';\n}\n\nelse if (!data.email_body || !data.email_body.trim()) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Email body is missing.';\n}\n\n// 8. Decision must be supported\nelse if (!['RETRY', 'RESOLVE'].includes(data.recovery_decision)) {\n  recoveryStatus = 'BLOCKED';\n  recoveryReason = 'Unsupported recovery decision.';\n}\n\nreturn {\n  json: {\n    ...data,\n    recovery_validation_status: recoveryStatus,\n    recovery_validation_reason: recoveryReason,\n    recovery_validated_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        224
+      ],
+      "id": "d8f521c8-2d86-476b-924b-6be77e6e77c0",
+      "name": "Code - Validate Supplier Email Recovery"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.recovery_validation_status }}",
+                    "rightValue": "READY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "350a98d7-a065-411b-934a-cb1dac412f53"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "READY"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3b20cd5e-0a7b-4a97-ac1e-86e547cf4e04",
+                    "leftValue": "={{ $json.recovery_validation_status }}",
+                    "rightValue": "BLOCKED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "BLOCKED"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        672,
+        224
+      ],
+      "id": "16b02a7d-2d58-4d97-8c09-f980f10668a5",
+      "name": "Switch - Recovery Validation"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.recovery_decision }}",
+                    "rightValue": "RETRY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "59ad2d0c-c8ab-4b85-b1eb-63d3f45d77b5"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "RETRY"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "fead26e1-cfb9-4412-bec9-1fd0c41dc46e",
+                    "leftValue": "={{ $json.recovery_decision }}",
+                    "rightValue": "RESOLVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "RESOLVE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        896,
+        128
+      ],
+      "id": "5a39de51-4315-4f92-95e3-a631b59f3fc1",
+      "name": "Switch - Recovery Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH claimed_draft AS (\n    UPDATE public.supplier_dispute_drafts\n    SET\n        status = 'SENDING',\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND email_approval_id = $3::uuid\n      AND status = 'FAILED'\n      AND sent_at IS NULL\n    RETURNING *\n),\n\nupdated_error AS (\n    UPDATE public.processing_errors\n    SET\n        status = 'RETRYING',\n        retry_count = retry_count + 1,\n        updated_at = NOW()\n    WHERE id = $4::uuid\n      AND organization_id = $2::uuid\n      AND status = 'OPEN'\n      AND EXISTS (SELECT 1 FROM claimed_draft)\n    RETURNING *\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.sent_at,\n\n    pe.id AS processing_error_id,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n\n    $5::text AS reviewer_name,\n    $6::text AS review_notes\n\nFROM claimed_draft d\nJOIN updated_error pe\n    ON pe.id = $4::uuid;",
+        "options": {
+          "queryReplacement": "={{ [   $json.draft_id,   $json.organization_id,   $json.email_approval_id,   $json.processing_error_id,   $json.reviewer_name,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        -64
+      ],
+      "id": "0a88e1ad-089b-40e1-9560-6d2f73f0f5b5",
+      "name": "DB - Claim Supplier Email Retry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nconst recipient = (data.recipient_email || '').trim().toLowerCase();\nconst subject = (data.email_subject || '').trim();\nconst body = (data.email_body || '').trim();\n\nlet sendSafetyStatus = 'READY_TO_SEND';\nlet sendSafetyReason = 'Recovery email passed final send safety validation.';\n\n// Draft must have been atomically claimed\nif (data.draft_status !== 'SENDING') {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    `Draft status is ${data.draft_status || 'missing'}, expected SENDING.`;\n}\n\n// Processing error must now be RETRYING\nelse if (data.processing_error_status !== 'RETRYING') {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    `Processing error status is ${data.processing_error_status || 'missing'}, expected RETRYING.`;\n}\n\n// Must still not have a confirmed send timestamp\nelse if (data.sent_at !== null && data.sent_at !== undefined) {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    'Email already has a sent timestamp.';\n}\n\n// Recipient required\nelse if (!recipient) {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    'Recipient email is missing.';\n}\n\n// Subject required\nelse if (!subject) {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    'Email subject is missing.';\n}\n\n// Body required\nelse if (!body) {\n  sendSafetyStatus = 'BLOCKED';\n  sendSafetyReason =\n    'Email body is missing.';\n}\n\n// Test domains must NEVER reach Gmail\nelse if (\n  recipient.endsWith('.example') ||\n  recipient.endsWith('@example.com') ||\n  recipient.endsWith('@example.org') ||\n  recipient.endsWith('@example.net')\n) {\n  sendSafetyStatus = 'TEST_DOMAIN';\n  sendSafetyReason =\n    'Recipient uses a reserved test domain. Gmail sending is blocked.';\n}\n\nreturn {\n  json: {\n    ...data,\n    send_safety_status: sendSafetyStatus,\n    send_safety_reason: sendSafetyReason,\n    send_safety_checked_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -64
+      ],
+      "id": "01654c2b-3014-4293-8db9-ef555f0f1b76",
+      "name": "Code - Validate Recovery Send Safety"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.send_safety_status }}",
+                    "rightValue": "READY_TO_SEND",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "dc31137c-478a-4a21-8d85-8cdfa3fa374e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "READY_TO_SEND"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "35a83617-bd59-4d95-8bf6-7fa9869c7fa8",
+                    "leftValue": "={{ $json.send_safety_status }}",
+                    "rightValue": "TEST_DOMAIN",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "TEST_DOMAIN"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "64c1af49-84ad-462f-8030-3eb32c00621b",
+                    "leftValue": "={{ $json.send_safety_status }}",
+                    "rightValue": "BLOCKED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "BLOCKED"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1568,
+        -80
+      ],
+      "id": "fbbc36df-e5f1-47cd-b98d-dde374aebbb4",
+      "name": "Switch - Recovery Send Safety"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH restored_draft AS (\n    UPDATE public.supplier_dispute_drafts\n    SET\n        status = 'FAILED',\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND email_approval_id = $3::uuid\n      AND status = 'SENDING'\n      AND sent_at IS NULL\n    RETURNING *\n),\n\nrestored_error AS (\n    UPDATE public.processing_errors\n    SET\n        status = 'OPEN',\n        updated_at = NOW()\n    WHERE id = $4::uuid\n      AND organization_id = $2::uuid\n      AND status = 'RETRYING'\n      AND EXISTS (\n          SELECT 1\n          FROM restored_draft\n      )\n    RETURNING *\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.email_approval_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.status AS draft_status,\n    d.sent_at,\n\n    pe.id AS processing_error_id,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n\n    $5::text AS send_safety_status,\n    $6::text AS send_safety_reason\n\nFROM restored_draft d\nJOIN restored_error pe\n    ON pe.id = $4::uuid;",
+        "options": {
+          "queryReplacement": "={{ [   $json.draft_id,   $json.organization_id,   $json.email_approval_id,   $json.processing_error_id,   $json.send_safety_status,   $json.send_safety_reason ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1792,
+        32
+      ],
+      "id": "8ea42a13-4a63-489e-b92e-c273028dd3e5",
+      "name": "DB - Stop Test Domain Recovery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH restored_draft AS (\n    UPDATE public.supplier_dispute_drafts\n    SET\n        status = 'FAILED',\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND email_approval_id = $3::uuid\n      AND status = 'SENDING'\n      AND sent_at IS NULL\n    RETURNING *\n),\n\nrestored_error AS (\n    UPDATE public.processing_errors\n    SET\n        status = 'OPEN',\n        updated_at = NOW()\n    WHERE id = $4::uuid\n      AND organization_id = $2::uuid\n      AND status = 'RETRYING'\n      AND EXISTS (\n          SELECT 1\n          FROM restored_draft\n      )\n    RETURNING *\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.email_approval_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.status AS draft_status,\n    d.sent_at,\n\n    pe.id AS processing_error_id,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n\n    $5::text AS send_safety_status,\n    $6::text AS send_safety_reason\n\nFROM restored_draft d\nJOIN restored_error pe\n    ON pe.id = $4::uuid;",
+        "options": {
+          "queryReplacement": "={{ [   $json.draft_id,   $json.organization_id,   $json.email_approval_id,   $json.processing_error_id,   $json.send_safety_status,   $json.send_safety_reason ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1792,
+        224
+      ],
+      "id": "e3c8b630-2230-4ae5-bc29-926f16937cd7",
+      "name": "DB - Stop Blocked Recovery"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.recipient_email }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.email_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1792,
+        -256
+      ],
+      "id": "5e716053-648d-4b30-afcb-bd71e8835428",
+      "name": "Gmail - Retry Supplier Dispute",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH sent_draft AS (\n    UPDATE public.supplier_dispute_drafts\n    SET\n        status = 'SENT',\n        sent_at = NOW(),\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND email_approval_id = $3::uuid\n      AND status = 'SENDING'\n      AND sent_at IS NULL\n    RETURNING *\n),\n\nresolved_error AS (\n    UPDATE public.processing_errors\n    SET\n        status = 'RESOLVED',\n        resolved_at = NOW(),\n        resolution_notes = $5::text,\n        updated_at = NOW()\n    WHERE id = $4::uuid\n      AND organization_id = $2::uuid\n      AND status = 'RETRYING'\n      AND EXISTS (\n          SELECT 1 FROM sent_draft\n      )\n    RETURNING *\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.recipient_email,\n    d.email_subject,\n    d.status AS draft_status,\n    d.sent_at,\n\n    pe.id AS processing_error_id,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n    pe.resolved_at,\n    pe.resolution_notes\n\nFROM sent_draft d\nJOIN resolved_error pe\n    ON pe.id = $4::uuid;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Claim Supplier Email Retry').item.json.draft_id,   $('DB - Claim Supplier Email Retry').item.json.organization_id,   $('DB - Claim Supplier Email Retry').item.json.email_approval_id,   $('DB - Claim Supplier Email Retry').item.json.processing_error_id,   'Supplier email successfully resent during controlled recovery. Reviewed by: ' + $('DB - Claim Supplier Email Retry').item.json.reviewer_name ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2016,
+        -352
+      ],
+      "id": "da14de2f-f409-4755-a84d-5d9dacdef5bb",
+      "name": "DB - Mark Recovered Supplier Email Sent"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH failed_draft AS (\n    UPDATE public.supplier_dispute_drafts\n    SET\n        status = 'FAILED',\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND email_approval_id = $3::uuid\n      AND status = 'SENDING'\n      AND sent_at IS NULL\n    RETURNING *\n),\n\nreopened_error AS (\n    UPDATE public.processing_errors\n    SET\n        status = 'OPEN',\n        updated_at = NOW()\n    WHERE id = $4::uuid\n      AND organization_id = $2::uuid\n      AND status = 'RETRYING'\n      AND EXISTS (\n          SELECT 1 FROM failed_draft\n      )\n    RETURNING *\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.recipient_email,\n    d.email_subject,\n    d.status AS draft_status,\n    d.sent_at,\n\n    pe.id AS processing_error_id,\n    pe.status AS processing_error_status,\n    pe.retry_count,\n\n    $5::text AS reviewer_name,\n    $6::text AS review_notes\n\nFROM failed_draft d\nJOIN reopened_error pe\n    ON pe.id = $4::uuid;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Claim Supplier Email Retry').item.json.draft_id,   $('DB - Claim Supplier Email Retry').item.json.organization_id,   $('DB - Claim Supplier Email Retry').item.json.email_approval_id,   $('DB - Claim Supplier Email Retry').item.json.processing_error_id,   $('DB - Claim Supplier Email Retry').item.json.reviewer_name,   $('DB - Claim Supplier Email Retry').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2016,
+        -160
+      ],
+      "id": "e10df8bc-6127-40d5-879a-e608e57d9822",
+      "name": "DB - Mark Recovery Retry Failed"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'SEND',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Supplier dispute email was successfully resent through the controlled recovery workflow.',\n\n    jsonb_build_object(\n        'draft_status', 'SENDING',\n        'processing_error_status', 'RETRYING'\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'SENT',\n        'processing_error_status', 'RESOLVED',\n        'email_sent', true\n    ),\n\n    jsonb_build_object(\n        'draft_id', $4::text,\n        'processing_error_id', $5::text,\n        'supplier_dispute_approval_id', $6::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'email_subject', $10::text,\n        'retry_count', $11::integer,\n        'review_notes', $12::text,\n        'recovery_type', 'CONTROLLED_RETRY',\n        'email_sent', true\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Mark Recovered Supplier Email Sent').item.json.organization_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.email_approval_id,   $('DB - Claim Supplier Email Retry').item.json.reviewer_name,   $('DB - Mark Recovered Supplier Email Sent').item.json.draft_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.processing_error_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.supplier_dispute_approval_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.invoice_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.supplier_id,   $('DB - Mark Recovered Supplier Email Sent').item.json.recipient_email,   $('DB - Mark Recovered Supplier Email Sent').item.json.email_subject,   $('DB - Mark Recovered Supplier Email Sent').item.json.retry_count,   $('DB - Claim Supplier Email Retry').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2240,
+        -352
+      ],
+      "id": "e102e08b-2cbf-406c-bcc0-25670afeced6",
+      "name": "DB - Log Successful Supplier Email Recovery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'FAIL',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Controlled supplier email recovery retry failed during the Gmail send step.',\n\n    jsonb_build_object(\n        'draft_status', 'SENDING',\n        'processing_error_status', 'RETRYING'\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'FAILED',\n        'processing_error_status', 'OPEN',\n        'email_sent', false\n    ),\n\n    jsonb_build_object(\n        'draft_id', $4::text,\n        'processing_error_id', $5::text,\n        'supplier_dispute_approval_id', $6::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'email_subject', $10::text,\n        'retry_count', $11::integer,\n        'review_notes', $12::text,\n        'recovery_type', 'CONTROLLED_RETRY',\n        'failure_stage', 'GMAIL_SEND',\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Mark Recovery Retry Failed').item.json.organization_id,   $('DB - Mark Recovery Retry Failed').item.json.email_approval_id,   $('DB - Claim Supplier Email Retry').item.json.reviewer_name,   $('DB - Mark Recovery Retry Failed').item.json.draft_id,   $('DB - Mark Recovery Retry Failed').item.json.processing_error_id,   $('DB - Mark Recovery Retry Failed').item.json.supplier_dispute_approval_id,   $('DB - Mark Recovery Retry Failed').item.json.invoice_id,   $('DB - Mark Recovery Retry Failed').item.json.supplier_id,   $('DB - Mark Recovery Retry Failed').item.json.recipient_email,   $('DB - Mark Recovery Retry Failed').item.json.email_subject,   $('DB - Mark Recovery Retry Failed').item.json.retry_count,   $('DB - Claim Supplier Email Retry').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2240,
+        -160
+      ],
+      "id": "1db91bdb-54c3-4509-a6e4-d5b796558d9c",
+      "name": "DB - Log Failed Supplier Email Recovery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.processing_errors\nSET\n    status = 'RESOLVED',\n    resolved_at = NOW(),\n    resolution_notes = $2::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $3::uuid\n  AND error_code = 'SUPPLIER_EMAIL_SEND_FAILED'\n  AND error_stage = 'NOTIFICATION'\n  AND status = 'OPEN'\nRETURNING\n    id AS processing_error_id,\n    organization_id,\n    invoice_id,\n    error_stage,\n    error_code,\n    error_message,\n    severity,\n    status AS processing_error_status,\n    retry_count,\n    workflow_name,\n    workflow_execution_id,\n    resolved_at,\n    resolution_notes,\n    context;",
+        "options": {
+          "queryReplacement": "={{ [   $json.processing_error_id,   'Recovery manually resolved by ' +     $json.reviewer_name +     '. No resend requested. Reviewer notes: ' +     $json.review_notes,   $json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        128
+      ],
+      "id": "2e2fde2b-b41b-4b50-8d4a-84a448223f45",
+      "name": "DB - Resolve Supplier Email Processing Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'RESOLVE',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Supplier email delivery incident was manually resolved without another email send attempt.',\n\n    jsonb_build_object(\n        'processing_error_status', 'OPEN'\n    ),\n\n    jsonb_build_object(\n        'processing_error_status', 'RESOLVED',\n        'email_resent', false\n    ),\n\n    jsonb_build_object(\n        'processing_error_id', $4::text,\n        'draft_id', $5::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $6::text,\n        'supplier_id', $7::text,\n        'recipient_email', $8::text,\n        'review_notes', $9::text,\n        'recovery_decision', 'RESOLVE',\n        'email_resent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Get Failed Supplier Email Recovery Context').item.json.organization_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.email_approval_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.reviewer_name,   $('DB - Resolve Supplier Email Processing Error').item.json.processing_error_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.draft_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.invoice_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.supplier_id,   $('DB - Get Failed Supplier Email Recovery Context').item.json.recipient_email,   $('DB - Get Failed Supplier Email Recovery Context').item.json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1344,
+        128
+      ],
+      "id": "7f516cf7-7356-4a39-b584-fbb9a82bb9ed",
+      "name": "DB - Log Supplier Email Manual Resolution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'HOLD',\n    'SYSTEM',\n    NULL,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Supplier email recovery retry was stopped because the recipient uses a reserved test domain.',\n\n    jsonb_build_object(\n        'draft_status', 'SENDING',\n        'processing_error_status', 'RETRYING'\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'FAILED',\n        'processing_error_status', 'OPEN',\n        'email_sent', false\n    ),\n\n    jsonb_build_object(\n        'draft_id', $3::text,\n        'processing_error_id', $4::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $5::text,\n        'supplier_id', $6::text,\n        'recipient_email', $7::text,\n        'retry_count', $8::integer,\n        'send_safety_status', 'TEST_DOMAIN',\n        'send_safety_reason', $9::text,\n        'recovery_type', 'CONTROLLED_RETRY',\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Stop Test Domain Recovery').item.json.organization_id,   $('DB - Claim Supplier Email Retry').item.json.email_approval_id,   $('DB - Stop Test Domain Recovery').item.json.draft_id,   $('DB - Stop Test Domain Recovery').item.json.processing_error_id,   $('DB - Stop Test Domain Recovery').item.json.invoice_id,   $('DB - Stop Test Domain Recovery').item.json.supplier_id,   $('DB - Claim Supplier Email Retry').item.json.recipient_email,   $('DB - Stop Test Domain Recovery').item.json.retry_count,   $('Code - Validate Recovery Send Safety').item.json.send_safety_reason ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2016,
+        32
+      ],
+      "id": "1c7854db-02b7-4f96-b4fc-417932c161f7",
+      "name": "DB - Log Test Domain Recovery Block"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'HOLD',\n    'SYSTEM',\n    NULL,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Supplier email recovery retry was blocked by the final send-safety validation.',\n\n    jsonb_build_object(\n        'draft_status', 'SENDING',\n        'processing_error_status', 'RETRYING'\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'FAILED',\n        'processing_error_status', 'OPEN',\n        'email_sent', false\n    ),\n\n    jsonb_build_object(\n        'draft_id', $3::text,\n        'processing_error_id', $4::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $5::text,\n        'supplier_id', $6::text,\n        'recipient_email', $7::text,\n        'retry_count', $8::integer,\n        'send_safety_status', 'BLOCKED',\n        'send_safety_reason', $9::text,\n        'recovery_type', 'CONTROLLED_RETRY',\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Stop Blocked Recovery').item.json.organization_id,   $('DB - Claim Supplier Email Retry').item.json.email_approval_id,   $('DB - Stop Blocked Recovery').item.json.draft_id,   $('DB - Stop Blocked Recovery').item.json.processing_error_id,   $('DB - Stop Blocked Recovery').item.json.invoice_id,   $('DB - Stop Blocked Recovery').item.json.supplier_id,   $('DB - Claim Supplier Email Retry').item.json.recipient_email,   $('DB - Stop Blocked Recovery').item.json.retry_count,   $('Code - Validate Recovery Send Safety').item.json.send_safety_reason ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2016,
+        224
+      ],
+      "id": "47d30dc4-94a6-464e-9588-350ad42c51cb",
+      "name": "DB - Log Blocked Supplier Email Recovery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'HOLD',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_RECOVERY_WORKFLOW',\n\n    'Supplier email recovery request was blocked during recovery validation.',\n\n    jsonb_build_object(\n        'processing_error_status', $4::text,\n        'draft_status', $5::text\n    ),\n\n    jsonb_build_object(\n        'recovery_validation_status', 'BLOCKED'\n    ),\n\n    jsonb_build_object(\n        'processing_error_id', $6::text,\n        'draft_id', $7::text,\n        'email_approval_id', $2::text,\n        'invoice_id', $8::text,\n        'supplier_id', $9::text,\n        'recipient_email', $10::text,\n        'recovery_decision', $11::text,\n        'validation_reason', $12::text,\n        'review_notes', $13::text,\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    action,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.reviewer_name,   $json.processing_error_status,   $json.draft_status,   $json.processing_error_id,   $json.draft_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.recovery_decision,   $json.recovery_validation_reason,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        896,
+        320
+      ],
+      "id": "23a53df0-8064-4952-a550-4dc991d74fb8",
+      "name": "DB - Log Invalid Recovery Request"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form - Supplier Email Recovery": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Failed Supplier Email Recovery Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Failed Supplier Email Recovery Context": {
+      "main": [
+        [
+          {
+            "node": "Code - Validate Supplier Email Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Validate Supplier Email Recovery": {
+      "main": [
+        [
+          {
+            "node": "Switch - Recovery Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Recovery Validation": {
+      "main": [
+        [
+          {
+            "node": "Switch - Recovery Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Log Invalid Recovery Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Recovery Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Claim Supplier Email Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Resolve Supplier Email Processing Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Claim Supplier Email Retry": {
+      "main": [
+        [
+          {
+            "node": "Code - Validate Recovery Send Safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Validate Recovery Send Safety": {
+      "main": [
+        [
+          {
+            "node": "Switch - Recovery Send Safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Recovery Send Safety": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Retry Supplier Dispute",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Stop Test Domain Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Stop Blocked Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Retry Supplier Dispute": {
+      "main": [
+        [
+          {
+            "node": "DB - Mark Recovered Supplier Email Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Mark Recovery Retry Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Mark Recovered Supplier Email Sent": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Successful Supplier Email Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Mark Recovery Retry Failed": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Failed Supplier Email Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Resolve Supplier Email Processing Error": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Email Manual Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Stop Test Domain Recovery": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Test Domain Recovery Block",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Stop Blocked Recovery": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Blocked Supplier Email Recovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

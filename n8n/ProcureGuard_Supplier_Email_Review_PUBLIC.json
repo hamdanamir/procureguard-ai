@@ -1,0 +1,655 @@
+{
+  "name": "ProcureGuard AI - Supplier Email Review",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "ProcureGuard AI — Supplier Email Review",
+        "formDescription": "Review an AI-generated supplier dispute email before it is sent.\n\nVerify the supplier, invoice, email content, and dispute details before approving or rejecting the communication.\n\nApproved emails may proceed to the controlled sending stage. Rejected emails will not be sent.\n\nAll review decisions are recorded in the ProcureGuard audit trail.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Email Approval ID",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "APPROVE"
+                  },
+                  {
+                    "option": "REJECT"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Review Notes",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit Email Decision",
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Supplier email review submitted successfully. ProcureGuard AI will process and record your decision."
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -48,
+        -400
+      ],
+      "id": "063249d2-dc8d-4350-9ea4-faa4bdc82503",
+      "name": "Form - Supplier Email Review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    -- Email approval\n    ap.id AS email_approval_id,\n    ap.organization_id,\n    ap.anomaly_id,\n    ap.invoice_id,\n    ap.approval_type,\n    ap.status AS approval_status,\n    ap.requested_by,\n    ap.requested_at,\n    ap.expires_at,\n\n    -- Exact linked draft\n    d.id AS draft_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.generated_by,\n    d.created_at AS draft_created_at,\n\n    -- Anomaly\n    a.anomaly_type,\n    a.severity,\n    a.status AS anomaly_status,\n    a.estimated_financial_impact,\n    a.description AS anomaly_description,\n\n    -- Invoice\n    i.invoice_number,\n    i.invoice_date,\n    i.currency,\n    i.total AS invoice_total,\n    i.processing_status,\n\n    -- Supplier\n    s.id AS supplier_id,\n    s.supplier_code,\n    s.supplier_name,\n    s.contact_name AS supplier_contact_name,\n    s.email AS supplier_database_email,\n\n    -- Human form decision\n    $2::text AS reviewer_name,\n    $3::text AS review_decision,\n    $4::text AS review_notes\n\nFROM public.approvals ap\n\nJOIN public.supplier_dispute_drafts d\n    ON d.email_approval_id = ap.id\n   AND d.organization_id = ap.organization_id\n\nJOIN public.anomalies a\n    ON a.id = ap.anomaly_id\n   AND a.organization_id = ap.organization_id\n\nJOIN public.invoices i\n    ON i.id = ap.invoice_id\n   AND i.organization_id = ap.organization_id\n\nJOIN public.suppliers s\n    ON s.id = d.supplier_id\n   AND s.organization_id = ap.organization_id\n\nWHERE ap.id = $1::uuid\n  AND ap.approval_type = 'SUPPLIER_EMAIL'\n  AND ap.status = 'PENDING'\n  AND d.status = 'PENDING_REVIEW';",
+        "options": {
+          "queryReplacement": "={{ [   $json[\"Email Approval ID\"],   $json[\"Reviewer Name\"],   $json[\"Decision\"],   $json[\"Review Notes\"] ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        176,
+        -400
+      ],
+      "id": "09baa456-cc29-42b6-b926-23b7c3539db7",
+      "name": "DB - Get Pending Supplier Email Review"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "APPROVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "2af688c8-e3fe-4700-b24c-aecab153004c"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "APPROVE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "30af793a-5c56-44d3-adf5-4b74c4222307",
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "REJECT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REJECT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        400,
+        -400
+      ],
+      "id": "5d48d8fd-221c-467f-b1f6-14b32f4538d3",
+      "name": "Switch - Supplier Email Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH updated_approval AS (\n    UPDATE public.approvals\n    SET\n        status = 'APPROVED',\n        decided_by = $4::text,\n        decided_at = NOW(),\n        decision_notes = $5::text,\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND approval_type = 'SUPPLIER_EMAIL'\n      AND status = 'PENDING'\n    RETURNING\n        id,\n        organization_id,\n        anomaly_id,\n        invoice_id,\n        status,\n        decided_by,\n        decided_at,\n        decision_notes\n),\n\nupdated_draft AS (\n    UPDATE public.supplier_dispute_drafts d\n    SET\n        status = 'APPROVED',\n        reviewed_by = $4::text,\n        reviewed_at = NOW(),\n        updated_at = NOW()\n    FROM updated_approval ap\n    WHERE d.id = $3::uuid\n      AND d.email_approval_id = ap.id\n      AND d.organization_id = ap.organization_id\n      AND d.status = 'PENDING_REVIEW'\n    RETURNING\n        d.id,\n        d.organization_id,\n        d.approval_id,\n        d.email_approval_id,\n        d.anomaly_id,\n        d.invoice_id,\n        d.supplier_id,\n        d.recipient_email,\n        d.email_subject,\n        d.email_body,\n        d.status,\n        d.generated_by,\n        d.reviewed_by,\n        d.reviewed_at,\n        d.sent_at,\n        d.created_at,\n        d.updated_at\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n\n    ap.status AS email_approval_status,\n    ap.decided_by,\n    ap.decided_at,\n    ap.decision_notes,\n\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.generated_by,\n    d.reviewed_by,\n    d.reviewed_at,\n    d.sent_at\n\nFROM updated_draft d\nJOIN updated_approval ap\n    ON ap.id = d.email_approval_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.email_approval_id,   $json.organization_id,   $json.draft_id,   $json.reviewer_name,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        624,
+        -496
+      ],
+      "id": "429be579-5467-4f2d-8821-41cf37907fb3",
+      "name": "DB - Approve Supplier Email"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'APPROVE',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_REVIEW_FORM',\n    $4::text,\n\n    jsonb_build_object(\n        'approval_status', 'PENDING',\n        'draft_status', 'PENDING_REVIEW'\n    ),\n\n    jsonb_build_object(\n        'approval_status', 'APPROVED',\n        'draft_status', 'APPROVED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'approval_type', 'SUPPLIER_EMAIL',\n        'decision', 'APPROVE',\n        'draft_id', $5::text,\n        'supplier_dispute_approval_id', $6::text,\n        'anomaly_id', $7::text,\n        'invoice_id', $8::text,\n        'supplier_id', $9::text,\n        'recipient_email', $10::text,\n        'email_subject', $11::text,\n        'review_notes', $12::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.decided_by,   'Supplier email draft approved by human reviewer. Email has not been sent yet.',   $json.draft_id,   $json.supplier_dispute_approval_id,   $json.anomaly_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.email_subject,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        848,
+        -496
+      ],
+      "id": "ac1309f4-c57a-4c20-960d-d1b9a43b9c56",
+      "name": "DB - Log Supplier Email Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.email_approval_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.reviewed_by,\n    d.reviewed_at,\n    d.sent_at,\n\n    ap.status AS email_approval_status,\n    ap.decided_by,\n    ap.decided_at,\n\n    s.supplier_name,\n    s.email AS supplier_database_email,\n\n    CASE\n        WHEN d.status <> 'APPROVED'\n            THEN 'DRAFT_NOT_APPROVED'\n\n        WHEN ap.status <> 'APPROVED'\n            THEN 'EMAIL_APPROVAL_NOT_APPROVED'\n\n        WHEN d.sent_at IS NOT NULL\n            THEN 'ALREADY_SENT'\n\n        WHEN d.recipient_email IS NULL\n          OR btrim(d.recipient_email) = ''\n            THEN 'MISSING_RECIPIENT'\n\n        WHEN lower(btrim(d.recipient_email))\n             <> lower(btrim(s.email))\n            THEN 'RECIPIENT_MISMATCH'\n\n        WHEN d.email_subject IS NULL\n          OR btrim(d.email_subject) = ''\n            THEN 'MISSING_SUBJECT'\n\n        WHEN d.email_body IS NULL\n          OR btrim(d.email_body) = ''\n            THEN 'MISSING_BODY'\n\n        WHEN lower(btrim(d.recipient_email)) LIKE '%.example'\n            THEN 'TEST_DOMAIN'\n\n        ELSE 'READY_TO_SEND'\n    END AS send_validation_status\n\nFROM public.supplier_dispute_drafts d\n\nJOIN public.approvals ap\n    ON ap.id = d.email_approval_id\n   AND ap.organization_id = d.organization_id\n\nJOIN public.suppliers s\n    ON s.id = d.supplier_id\n   AND s.organization_id = d.organization_id\n\nWHERE d.id = $1::uuid\n  AND d.organization_id = $2::uuid\n  AND d.email_approval_id = $3::uuid\n  AND ap.approval_type = 'SUPPLIER_EMAIL';",
+        "options": {
+          "queryReplacement": "={{ [   $json.metadata.draft_id,   $json.organization_id,   $json.entity_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1072,
+        -496
+      ],
+      "id": "1509f6b0-9b6a-4ebf-a419-32e4d3f0d052",
+      "name": "DB - Validate Supplier Email Before Send"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'HOLD',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'SUPPLIER_EMAIL_SEND_SAFETY',\n    'Supplier email sending blocked because the recipient uses a test domain.',\n    NULL,\n    NULL,\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'reason', 'TEST_DOMAIN',\n        'draft_id', $3::text,\n        'supplier_dispute_approval_id', $4::text,\n        'anomaly_id', $5::text,\n        'invoice_id', $6::text,\n        'supplier_id', $7::text,\n        'recipient_email', $8::text,\n        'email_subject', $9::text,\n        'draft_status', $10::text,\n        'email_approval_status', $11::text,\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.draft_id,   $json.supplier_dispute_approval_id,   $json.anomaly_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.email_subject,   $json.draft_status,   $json.email_approval_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1520,
+        -496
+      ],
+      "id": "0dc1b701-2587-4896-b3bf-add1f5ca68ec",
+      "name": "DB - Log Supplier Email Test Block"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'HOLD',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'SUPPLIER_EMAIL_SEND_SAFETY',\n\n    'Supplier email sending blocked by the pre-send safety validation.',\n\n    NULL,\n    NULL,\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'reason', $3::text,\n        'draft_id', $4::text,\n        'supplier_dispute_approval_id', $5::text,\n        'anomaly_id', $6::text,\n        'invoice_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'supplier_database_email', $10::text,\n        'email_subject', $11::text,\n        'draft_status', $12::text,\n        'email_approval_status', $13::text,\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.send_validation_status,   $json.draft_id,   $json.supplier_dispute_approval_id,   $json.anomaly_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.supplier_database_email,   $json.email_subject,   $json.draft_status,   $json.email_approval_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1520,
+        -304
+      ],
+      "id": "b699759a-fa34-4c71-80cb-23994070f63c",
+      "name": "DB - Log Supplier Email Send Block"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.send_validation_status }}",
+                    "rightValue": "READY_TO_SEND",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "c5a738d1-6b3d-4e35-b49f-63e31a44e184"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "READY_TO_SEND"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "450c0933-e49f-414a-bd66-ddc16084d9d3",
+                    "leftValue": "={{ $json.send_validation_status }}",
+                    "rightValue": "TEST_DOMAIN",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "TEST_DOMAIN"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3e9606ed-3546-47ab-9b6d-6c0539adde7b",
+                    "leftValue": "={{ !['READY_TO_SEND', 'TEST_DOMAIN'].includes($json.send_validation_status) }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "BLOCKED"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1296,
+        -512
+      ],
+      "id": "5bd93324-35e6-41be-8be9-8e5f75fbba43",
+      "name": "Switch - Email Send Safety"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.supplier_dispute_drafts\nSET\n    status = 'SENT',\n    sent_at = NOW(),\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND email_approval_id = $3::uuid\n    AND status = 'SENDING'\n  AND sent_at IS NULL\nRETURNING\n    id AS draft_id,\n    organization_id,\n    approval_id AS supplier_dispute_approval_id,\n    email_approval_id,\n    anomaly_id,\n    invoice_id,\n    supplier_id,\n    recipient_email,\n    email_subject,\n    status AS draft_status,\n    generated_by,\n    reviewed_by,\n    reviewed_at,\n    sent_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Validate Supplier Email Before Send').item.json.draft_id,   $('DB - Validate Supplier Email Before Send').item.json.organization_id,   $('DB - Validate Supplier Email Before Send').item.json.email_approval_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1968,
+        -784
+      ],
+      "id": "ad723176-c622-45af-8823-46e9ffb01729",
+      "name": "DB - Mark Supplier Email Sent"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'SEND',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'SUPPLIER_EMAIL_WORKFLOW',\n\n    'Approved supplier dispute email successfully sent.',\n\n    jsonb_build_object(\n        'draft_status', 'APPROVED',\n        'sent_at', NULL\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'SENT',\n        'sent_at', $3::text\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'draft_id', $4::text,\n        'supplier_dispute_approval_id', $5::text,\n        'email_approval_id', $2::text,\n        'anomaly_id', $6::text,\n        'invoice_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'email_subject', $10::text,\n        'gmail_message_id', $11::text,\n        'gmail_thread_id', $12::text,\n        'email_sent', true\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.sent_at,   $json.draft_id,   $json.supplier_dispute_approval_id,   $json.anomaly_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.email_subject,   $('Gmail - Send Supplier Dispute').item.json.id,   $('Gmail - Send Supplier Dispute').item.json.threadId ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2192,
+        -784
+      ],
+      "id": "4cfbdb3e-6205-4024-9c27-119c989a7a04",
+      "name": "DB - Log Supplier Email Sent"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.recipient_email }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.email_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        -688
+      ],
+      "id": "0f62818f-a910-4b1a-8961-128462536631",
+      "name": "Gmail - Send Supplier Dispute",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH updated_approval AS (\n    UPDATE public.approvals\n    SET\n        status = 'REJECTED',\n        decided_by = $4::text,\n        decided_at = NOW(),\n        decision_notes = $5::text,\n        updated_at = NOW()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND approval_type = 'SUPPLIER_EMAIL'\n      AND status = 'PENDING'\n    RETURNING\n        id,\n        organization_id,\n        anomaly_id,\n        invoice_id,\n        status,\n        decided_by,\n        decided_at,\n        decision_notes\n),\n\nupdated_draft AS (\n    UPDATE public.supplier_dispute_drafts d\n    SET\n        status = 'REJECTED',\n        reviewed_by = $4::text,\n        reviewed_at = NOW(),\n        updated_at = NOW()\n    FROM updated_approval ap\n    WHERE d.id = $3::uuid\n      AND d.email_approval_id = ap.id\n      AND d.organization_id = ap.organization_id\n      AND d.status = 'PENDING_REVIEW'\n    RETURNING\n        d.id,\n        d.organization_id,\n        d.approval_id,\n        d.email_approval_id,\n        d.anomaly_id,\n        d.invoice_id,\n        d.supplier_id,\n        d.recipient_email,\n        d.email_subject,\n        d.status,\n        d.reviewed_by,\n        d.reviewed_at,\n        d.sent_at\n)\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n\n    ap.status AS email_approval_status,\n    ap.decided_by,\n    ap.decided_at,\n    ap.decision_notes,\n\n    d.recipient_email,\n    d.email_subject,\n    d.status AS draft_status,\n    d.reviewed_by,\n    d.reviewed_at,\n    d.sent_at\n\nFROM updated_draft d\nJOIN updated_approval ap\n    ON ap.id = d.email_approval_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.email_approval_id,   $json.organization_id,   $json.draft_id,   $json.reviewer_name,   $json.review_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        624,
+        -304
+      ],
+      "id": "a50becbe-a51f-4f99-b5cd-0f03ef3ce4ce",
+      "name": "DB - Reject Supplier Email"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'REJECT',\n    'USER',\n    $3::text,\n    'SUPPLIER_EMAIL_REVIEW_FORM',\n\n    'Supplier email draft rejected by human reviewer. Email was not sent.',\n\n    jsonb_build_object(\n        'approval_status', 'PENDING',\n        'draft_status', 'PENDING_REVIEW'\n    ),\n\n    jsonb_build_object(\n        'approval_status', 'REJECTED',\n        'draft_status', 'REJECTED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'approval_type', 'SUPPLIER_EMAIL',\n        'decision', 'REJECT',\n        'draft_id', $4::text,\n        'supplier_dispute_approval_id', $5::text,\n        'anomaly_id', $6::text,\n        'invoice_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'email_subject', $10::text,\n        'review_notes', $11::text,\n        'email_sent', false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.email_approval_id,   $json.decided_by,   $json.draft_id,   $json.supplier_dispute_approval_id,   $json.anomaly_id,   $json.invoice_id,   $json.supplier_id,   $json.recipient_email,   $json.email_subject,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        848,
+        -304
+      ],
+      "id": "7ae20aa8-4709-4829-8825-354b336d575a",
+      "name": "DB - Log Supplier Email Rejection"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.supplier_dispute_drafts\nSET\n    status = 'SENDING',\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND email_approval_id = $3::uuid\n  AND status = 'APPROVED'\n  AND sent_at IS NULL\nRETURNING\n    id AS draft_id,\n    organization_id,\n    approval_id AS supplier_dispute_approval_id,\n    email_approval_id,\n    anomaly_id,\n    invoice_id,\n    supplier_id,\n    recipient_email,\n    email_subject,\n    email_body,\n    status AS draft_status,\n    generated_by,\n    reviewed_by,\n    reviewed_at,\n    sent_at,\n    created_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.draft_id,   $json.organization_id,   $json.email_approval_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1520,
+        -688
+      ],
+      "id": "cbd0fb9f-4d67-465a-ac1b-2e85cdce145f",
+      "name": "DB - Claim Supplier Email Send"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.supplier_dispute_drafts\nSET\n    status = 'FAILED',\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND email_approval_id = $3::uuid\n  AND status = 'SENDING'\n  AND sent_at IS NULL\nRETURNING\n    id AS draft_id,\n    organization_id,\n    approval_id AS supplier_dispute_approval_id,\n    email_approval_id,\n    anomaly_id,\n    invoice_id,\n    supplier_id,\n    recipient_email,\n    email_subject,\n    status AS draft_status,\n    sent_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Claim Supplier Email Send').item.json.draft_id,   $('DB - Claim Supplier Email Send').item.json.organization_id,   $('DB - Claim Supplier Email Send').item.json.email_approval_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1968,
+        -592
+      ],
+      "id": "1b25af0b-a602-462b-8e17-4005025e75a9",
+      "name": "DB - Mark Supplier Email Failed"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'FAIL',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'SUPPLIER_EMAIL_WORKFLOW',\n\n    'Supplier email send attempt failed.',\n\n    jsonb_build_object(\n        'draft_status', 'SENDING',\n        'sent_at', NULL\n    ),\n\n    jsonb_build_object(\n        'draft_status', 'FAILED',\n        'sent_at', NULL\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Email Review',\n        'draft_id', $3::text,\n        'supplier_dispute_approval_id', $4::text,\n        'email_approval_id', $2::text,\n        'anomaly_id', $5::text,\n        'invoice_id', $6::text,\n        'supplier_id', $7::text,\n        'recipient_email', $8::text,\n        'email_subject', $9::text,\n        'email_sent', false,\n        'failure_stage', 'GMAIL_SEND'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Mark Supplier Email Failed').item.json.organization_id,   $('DB - Mark Supplier Email Failed').item.json.email_approval_id,   $('DB - Mark Supplier Email Failed').item.json.draft_id,   $('DB - Mark Supplier Email Failed').item.json.supplier_dispute_approval_id,   $('DB - Mark Supplier Email Failed').item.json.anomaly_id,   $('DB - Mark Supplier Email Failed').item.json.invoice_id,   $('DB - Mark Supplier Email Failed').item.json.supplier_id,   $('DB - Mark Supplier Email Failed').item.json.recipient_email,   $('DB - Mark Supplier Email Failed').item.json.email_subject ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2192,
+        -592
+      ],
+      "id": "2b0b2884-3b9e-46b6-9855-239a84fac55e",
+      "name": "DB - Log Supplier Email Send Failure"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.processing_errors (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    error_stage,\n    error_code,\n    error_message,\n    technical_details,\n    severity,\n    status,\n    retry_count,\n    workflow_name,\n    workflow_execution_id,\n    source_message_id,\n    context\n)\nVALUES (\n    $1::uuid,\n    $2::uuid,\n    NULL,\n    'NOTIFICATION',\n    'SUPPLIER_EMAIL_SEND_FAILED',\n    'Supplier dispute email could not be confirmed as successfully sent.',\n    'Gmail send step failed. The supplier dispute draft was moved from SENDING to FAILED. Manual review is required before retrying.',\n    'ERROR',\n    'OPEN',\n    0,\n    'ProcureGuard AI - Supplier Email Review',\n    $3::text,\n    NULL,\n    jsonb_build_object(\n        'draft_id', $4::text,\n        'supplier_dispute_approval_id', $5::text,\n        'email_approval_id', $6::text,\n        'anomaly_id', $7::text,\n        'supplier_id', $8::text,\n        'recipient_email', $9::text,\n        'email_subject', $10::text,\n        'draft_status', 'FAILED',\n        'email_sent_confirmed', false,\n        'failure_stage', 'GMAIL_SEND'\n    )\n)\nRETURNING\n    id AS processing_error_id,\n    organization_id,\n    invoice_id,\n    error_stage,\n    error_code,\n    error_message,\n    severity,\n    status,\n    retry_count,\n    workflow_name,\n    workflow_execution_id,\n    context,\n    occurred_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Mark Supplier Email Failed').item.json.organization_id,   $('DB - Mark Supplier Email Failed').item.json.invoice_id,   $execution.id,   $('DB - Mark Supplier Email Failed').item.json.draft_id,   $('DB - Mark Supplier Email Failed').item.json.supplier_dispute_approval_id,   $('DB - Mark Supplier Email Failed').item.json.email_approval_id,   $('DB - Mark Supplier Email Failed').item.json.anomaly_id,   $('DB - Mark Supplier Email Failed').item.json.supplier_id,   $('DB - Mark Supplier Email Failed').item.json.recipient_email,   $('DB - Mark Supplier Email Failed').item.json.email_subject ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2416,
+        -592
+      ],
+      "id": "2837e1f1-8b39-4fb9-9cc2-0b98a1f11324",
+      "name": "DB - Record Supplier Email Processing Error"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form - Supplier Email Review": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Pending Supplier Email Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Pending Supplier Email Review": {
+      "main": [
+        [
+          {
+            "node": "Switch - Supplier Email Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Supplier Email Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Approve Supplier Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Reject Supplier Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Approve Supplier Email": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Email Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Supplier Email Approval": {
+      "main": [
+        [
+          {
+            "node": "DB - Validate Supplier Email Before Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Validate Supplier Email Before Send": {
+      "main": [
+        [
+          {
+            "node": "Switch - Email Send Safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Email Send Safety": {
+      "main": [
+        [
+          {
+            "node": "DB - Claim Supplier Email Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Log Supplier Email Test Block",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Log Supplier Email Send Block",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Mark Supplier Email Sent": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Email Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Send Supplier Dispute": {
+      "main": [
+        [
+          {
+            "node": "DB - Mark Supplier Email Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Mark Supplier Email Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Reject Supplier Email": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Email Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Claim Supplier Email Send": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Send Supplier Dispute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Mark Supplier Email Failed": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Email Send Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Supplier Email Send Failure": {
+      "main": [
+        [
+          {
+            "node": "DB - Record Supplier Email Processing Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

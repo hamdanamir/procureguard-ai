@@ -1,0 +1,785 @@
+{
+  "name": "ProcureGuard AI - Product Match Approval",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "ProcureGuard AI - Product Match Review",
+        "formDescription": "Review a possible supplier invoice product match and approve or reject the proposed match.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Approval ID",
+              "placeholder": "Enter the approval ID",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "placeholder": "Enter your name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "APPROVE"
+                  },
+                  {
+                    "option": "REJECT"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Review Notes",
+              "fieldType": "textarea",
+              "placeholder": "Enter the reason for your decision"
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Form Is Submitted"
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -208,
+        160
+      ],
+      "id": "ee865472-cb89-4ccd-bd18-e46c74ee594d",
+      "name": "Form - Product Match Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH approval_update AS (\n    UPDATE public.approvals\n    SET\n        status = 'APPROVED',\n        decided_by = $5::text,\n        decided_at = now(),\n        decision_notes = $6::text,\n        updated_at = now()\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND status = 'PENDING'\n      AND approval_type = 'ANOMALY_REVIEW'\n\n    RETURNING\n        id,\n        organization_id,\n        anomaly_id,\n        invoice_id\n),\n\ninvoice_item_update AS (\n    UPDATE public.invoice_items ii\n    SET\n        product_id = $4::uuid,\n        purchase_order_item_id = $7::uuid,\n        updated_at = now()\n\n    FROM approval_update au\n\n    WHERE ii.id = $3::uuid\n      AND ii.organization_id = au.organization_id\n      AND ii.invoice_id = au.invoice_id\n\n    RETURNING\n        ii.id AS invoice_item_id,\n        ii.invoice_id,\n        ii.organization_id,\n        ii.product_id,\n        ii.purchase_order_item_id,\n        ii.invoiced_quantity,\n        ii.unit_price,\n        ii.line_total\n),\n\nanomaly_update AS (\n    UPDATE public.anomalies a\n    SET\n        status = 'RESOLVED',\n        reviewed_at = COALESCE(a.reviewed_at, now()),\n        resolved_at = now(),\n        reviewed_by = $5::text,\n        resolution_notes = $6::text,\n        updated_at = now()\n\n    FROM approval_update au\n\n    WHERE a.id = au.anomaly_id\n      AND a.organization_id = au.organization_id\n      AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n\n    RETURNING\n        a.id AS anomaly_id,\n        a.status AS anomaly_status\n)\n\nSELECT\n    au.id AS approval_id,\n    'APPROVED'::text AS approval_status,\n\n    iu.invoice_item_id,\n    iu.invoice_id,\n    iu.organization_id,\n    iu.product_id,\n    iu.purchase_order_item_id,\n    iu.invoiced_quantity,\n    iu.unit_price,\n    iu.line_total,\n\n    an.anomaly_id,\n    an.anomaly_status,\n\n    $5::text AS decided_by,\n    $6::text AS decision_notes\n\nFROM approval_update au\nJOIN invoice_item_update iu\n    ON iu.invoice_id = au.invoice_id\n   AND iu.organization_id = au.organization_id\nJOIN anomaly_update an\n    ON an.anomaly_id = au.anomaly_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.approval_id,   $json.organization_id,   $json.invoice_item_id,   $json.candidate_product_id,   $json.reviewer_name,   $json.review_notes || 'Product match approved by reviewer.',   $json.candidate_po_item_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        464,
+        64
+      ],
+      "id": "fc728511-c447-498c-8768-fc42d06b504a",
+      "name": "DB - Approve Product Match"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    ii.organization_id,\n    ii.id AS invoice_item_id,\n    ii.invoice_id,\n    ii.product_id,\n    ii.purchase_order_item_id,\n\n    i.supplier_id,\n    i.purchase_order_id,\n    i.invoice_number,\n    i.invoice_date,\n    i.currency,\n\n    ii.line_number AS invoice_line_number,\n    ii.description_from_invoice AS invoice_description,\n    ii.supplier_sku AS invoice_supplier_sku,\n    ii.invoiced_quantity,\n    ii.unit_price AS invoice_unit_price,\n    ii.line_total AS invoice_line_total,\n\n    p.sku AS product_sku,\n    p.product_name,\n\n    poi.line_number AS po_line_number,\n    poi.ordered_quantity,\n    poi.unit_price AS po_unit_price,\n\n    sp.agreed_unit_price,\n    sp.tolerance_percent,\n\n    COALESCE(\n        sp.agreed_unit_price,\n        poi.unit_price\n    ) AS expected_unit_price,\n\n    ii.unit_price -\n    COALESCE(\n        sp.agreed_unit_price,\n        poi.unit_price\n    ) AS unit_price_variance,\n\n    (\n        ii.unit_price -\n        COALESCE(\n            sp.agreed_unit_price,\n            poi.unit_price\n        )\n    ) * ii.invoiced_quantity AS price_variance_amount,\n\n    CASE\n        WHEN COALESCE(sp.agreed_unit_price, poi.unit_price) > 0\n        THEN ROUND(\n            (\n                (\n                    ii.unit_price -\n                    COALESCE(sp.agreed_unit_price, poi.unit_price)\n                )\n                /\n                COALESCE(sp.agreed_unit_price, poi.unit_price)\n            ) * 100,\n            2\n        )\n        ELSE NULL\n    END AS price_variance_percent,\n\n    ii.invoiced_quantity - poi.ordered_quantity\n        AS quantity_variance,\n\n    CASE\n        WHEN poi.ordered_quantity > 0\n        THEN ROUND(\n            (\n                (ii.invoiced_quantity - poi.ordered_quantity)\n                / poi.ordered_quantity\n            ) * 100,\n            2\n        )\n        ELSE NULL\n    END AS quantity_variance_percent\n\nFROM public.invoice_items ii\n\nJOIN public.invoices i\n    ON i.id = ii.invoice_id\n   AND i.organization_id = ii.organization_id\n\nJOIN public.products p\n    ON p.id = ii.product_id\n   AND p.organization_id = ii.organization_id\n\nJOIN public.purchase_order_items poi\n    ON poi.id = ii.purchase_order_item_id\n   AND poi.organization_id = ii.organization_id\n\nLEFT JOIN public.supplier_products sp\n    ON sp.organization_id = ii.organization_id\n   AND sp.supplier_id = i.supplier_id\n   AND sp.product_id = ii.product_id\n   AND sp.status = 'ACTIVE'\n   AND sp.effective_from <= i.invoice_date\n   AND (\n       sp.effective_to IS NULL\n       OR sp.effective_to >= i.invoice_date\n   )\n\nWHERE ii.id = $1::uuid\n  AND ii.organization_id = $2::uuid\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_item_id,   $json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        912,
+        64
+      ],
+      "id": "dc7422e8-ac1a-4d39-8deb-fae6412e3b01",
+      "name": "DB - Get Approved Item Pricing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n\n    anomaly_type,\n    severity,\n    status,\n\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n\n    'PRICE_VARIANCE',\n\n    CASE\n        WHEN ABS($10::numeric) >= 50 THEN 'CRITICAL'\n        WHEN ABS($10::numeric) >= 20 THEN 'HIGH'\n        WHEN ABS($10::numeric) >= 10 THEN 'MEDIUM'\n        ELSE 'LOW'\n    END,\n\n    'OPEN',\n\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n\n    ABS($11::numeric),\n\n    $12::text,\n\n    jsonb_build_object(\n        'invoice_number', $13::text,\n        'invoice_line_number', $14::integer,\n        'invoice_description', $15::text,\n        'invoice_supplier_sku', $16::text,\n\n        'product_sku', $17::text,\n        'product_name', $18::text,\n\n        'invoiced_quantity', $19::numeric,\n        'ordered_quantity', $20::numeric,\n\n        'expected_unit_price', $7::numeric,\n        'invoice_unit_price', $8::numeric,\n\n        'unit_price_variance', $9::numeric,\n        'price_variance_percent', $10::numeric,\n        'price_variance_amount', $11::numeric,\n\n        'tolerance_percent', $21::numeric,\n        'currency', $22::text,\n\n        'detection_method',\n        'APPROVED_PRODUCT_MATCH_PRICE_COMPARISON'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.invoice_item_id = $3::uuid\n      AND a.anomaly_type = 'PRICE_VARIANCE'\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_item_id,   $json.supplier_id,   $json.product_id,   $json.purchase_order_id,    $json.expected_unit_price,   $json.invoice_unit_price,   $json.unit_price_variance,   $json.price_variance_percent,   $json.price_variance_amount,    'Price variance detected for ' +     $json.product_name +     ' on invoice ' +     $json.invoice_number +     '. Expected unit price: ' +     $json.currency + ' ' + $json.expected_unit_price +     ', actual unit price: ' +     $json.currency + ' ' + $json.invoice_unit_price +     ', variance: ' +     $json.price_variance_percent + '%.',    $json.invoice_number,   $json.invoice_line_number,   $json.invoice_description,   $json.invoice_supplier_sku,    $json.product_sku,   $json.product_name,    $json.invoiced_quantity,   $json.ordered_quantity,    $json.tolerance_percent,   $json.currency ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1360,
+        -160
+      ],
+      "id": "b01d8199-80cc-4318-a6b0-3c7be15b06f1",
+      "name": "DB - Create Price Variance Anomaly"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7a781ea2-04c2-4157-b029-63f7832f3518",
+              "leftValue": "={{ Math.abs(Number($json.quantity_variance)) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1136,
+        208
+      ],
+      "id": "d1c15d17-5479-4a65-81d1-d9c0a681ab6f",
+      "name": "IF - Quantity Variance Exists"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "APPROVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "c3d9bba5-6cd5-4f20-939b-5e0ae836939f"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "APPROVE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "5afe42ad-8fd0-4bcc-af48-a3a27742fc68",
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "REJECT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REJECT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        160
+      ],
+      "id": "00678515-046d-4acf-b066-69809825ced1",
+      "name": "Switch - Approval Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH approval_update AS (\n    UPDATE public.approvals\n    SET\n        status = 'REJECTED',\n        decided_by = $3::text,\n        decided_at = now(),\n        decision_notes = $4::text,\n        updated_at = now()\n\n    WHERE id = $1::uuid\n      AND organization_id = $2::uuid\n      AND status = 'PENDING'\n      AND approval_type = 'ANOMALY_REVIEW'\n\n    RETURNING\n        id,\n        organization_id,\n        anomaly_id,\n        invoice_id\n),\n\nanomaly_update AS (\n    UPDATE public.anomalies a\n    SET\n        status = 'RESOLVED',\n        reviewed_at = COALESCE(a.reviewed_at, now()),\n        resolved_at = now(),\n        reviewed_by = $3::text,\n        resolution_notes =\n            COALESCE(\n                NULLIF($4::text, ''),\n                'Proposed product match rejected by reviewer.'\n            ),\n        updated_at = now()\n\n    FROM approval_update au\n\n    WHERE a.id = au.anomaly_id\n      AND a.organization_id = au.organization_id\n      AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n\n    RETURNING\n        a.id AS anomaly_id,\n        a.status AS anomaly_status\n)\n\nSELECT\n    au.id AS approval_id,\n    au.organization_id,\n    au.invoice_id,\n    au.anomaly_id,\n\n    'REJECTED'::text AS approval_status,\n\n    an.anomaly_status,\n\n    $3::text AS decided_by,\n\n    COALESCE(\n        NULLIF($4::text, ''),\n        'Proposed product match rejected by reviewer.'\n    ) AS decision_notes\n\nFROM approval_update au\n\nJOIN anomaly_update an\n    ON an.anomaly_id = au.anomaly_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.approval_id,   $json.organization_id,   $json.reviewer_name,   $json.review_notes || 'Proposed product match rejected by reviewer.' ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        464,
+        448
+      ],
+      "id": "e1272c23-c1d0-445b-b3b4-c807b11ddae0",
+      "name": "DB - Reject Product Match"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n\n    anomaly_type,\n    severity,\n    status,\n\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    a.organization_id,\n    a.invoice_id,\n    a.invoice_item_id,\n    a.supplier_id,\n\n    NULL,\n    a.purchase_order_id,\n\n    'UNKNOWN_PRODUCT',\n    'HIGH',\n    'OPEN',\n\n    COALESCE(ii.line_total, 0),\n\n    'Product match rejected by human reviewer. Invoice item \"' ||\n    COALESCE(ii.description_from_invoice, 'Unknown item') ||\n    '\" requires manual product resolution.',\n\n    jsonb_build_object(\n        'reason', 'REJECTED_PRODUCT_MATCH',\n\n        'original_review_anomaly_id', a.id,\n        'approval_id', ap.id,\n\n        'invoice_line_number', ii.line_number,\n        'invoice_description', ii.description_from_invoice,\n        'invoice_supplier_sku', ii.supplier_sku,\n        'invoice_quantity', ii.invoiced_quantity,\n        'invoice_unit_price', ii.unit_price,\n        'invoice_line_total', ii.line_total,\n\n        'rejected_candidate_product_id', a.product_id,\n        'rejected_candidate_product_name',\n            a.evidence->>'candidate_product_name',\n\n        'rejected_candidate_internal_sku',\n            a.evidence->>'candidate_internal_sku',\n\n        'rejected_candidate_po_item_id',\n            a.evidence->>'candidate_po_item_id',\n\n        'rejected_match_score',\n            a.evidence->>'match_score',\n\n        'reviewed_by', ap.decided_by,\n        'review_notes', ap.decision_notes\n    )\n\nFROM public.approvals ap\n\nJOIN public.anomalies a\n    ON a.id = ap.anomaly_id\n   AND a.organization_id = ap.organization_id\n\nJOIN public.invoice_items ii\n    ON ii.id = a.invoice_item_id\n   AND ii.organization_id = a.organization_id\n   AND ii.invoice_id = a.invoice_id\n\nWHERE ap.id = $1::uuid\n  AND ap.organization_id = $2::uuid\n  AND ap.status = 'REJECTED'\n  AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM public.anomalies existing\n      WHERE existing.organization_id = a.organization_id\n        AND existing.invoice_id = a.invoice_id\n        AND existing.invoice_item_id = a.invoice_item_id\n        AND existing.anomaly_type = 'UNKNOWN_PRODUCT'\n        AND existing.status IN (\n            'OPEN',\n            'UNDER_REVIEW',\n            'CONFIRMED'\n        )\n  )\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.entity_id,\n  $json.organization_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        912,
+        448
+      ],
+      "id": "b13a3b52-e6e9-40af-a454-2f0360e849ca",
+      "name": "DB - Create Rejected Match Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence\n)\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n\n    'QUANTITY_VARIANCE',\n\n    CASE\n        WHEN ABS($10::numeric) >= 50 THEN 'CRITICAL'\n        WHEN ABS($10::numeric) >= 25 THEN 'HIGH'\n        WHEN ABS($10::numeric) >= 10 THEN 'MEDIUM'\n        ELSE 'LOW'\n    END,\n\n    'OPEN',\n\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n\n    CASE\n        WHEN $9::numeric > 0\n        THEN $9::numeric * $11::numeric\n        ELSE 0\n    END,\n\n    'Quantity variance detected on invoice \"' ||\n        $12::text ||\n        '\" line ' ||\n        $13::text ||\n        '. Ordered quantity: ' ||\n        $7::text ||\n        ', invoiced quantity: ' ||\n        $8::text ||\n        ', variance: ' ||\n        $9::text ||\n        '.',\n\n    jsonb_build_object(\n        'reason', 'INVOICED_QUANTITY_DIFFERS_FROM_PO',\n        'invoice_number', $12::text,\n        'invoice_line_number', $13::integer,\n        'product_id', $5::uuid,\n        'product_sku', $14::text,\n        'product_name', $15::text,\n        'purchase_order_item_id', $16::uuid,\n        'ordered_quantity', $7::numeric,\n        'invoiced_quantity', $8::numeric,\n        'quantity_variance', $9::numeric,\n        'quantity_variance_percent', $10::numeric,\n        'unit_price', $11::numeric,\n        'currency', $17::text,\n        'detection_method', 'PO_VS_INVOICE_QUANTITY'\n    )\n\nWHERE ABS($9::numeric) > 0\n\nAND NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.invoice_item_id = $3::uuid\n      AND a.anomaly_type = 'QUANTITY_VARIANCE'\n      AND a.status IN (\n          'OPEN',\n          'UNDER_REVIEW',\n          'CONFIRMED'\n      )\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_item_id,   $json.supplier_id,   $json.product_id,   $json.purchase_order_id,   $json.ordered_quantity,   $json.invoiced_quantity,   $json.quantity_variance,   $json.quantity_variance_percent,   $json.invoice_unit_price,   $json.invoice_number,   $json.invoice_line_number,   $json.product_sku,   $json.product_name,   $json.purchase_order_item_id,   $json.currency ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1360,
+        128
+      ],
+      "id": "28505e27-b87e-4a23-8b50-fb14445c18dc",
+      "name": "DB - Create Quantity Variance Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_status,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n    )::integer AS active_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'OPEN'\n    )::integer AS open_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'UNDER_REVIEW'\n    )::integer AS under_review_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'CONFIRMED'\n    )::integer AS confirmed_count,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ),\n        0\n    ) AS active_financial_impact,\n\n    CASE\n        WHEN COUNT(a.id) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ) > 0\n        THEN 'REVIEW_REQUIRED'\n        ELSE 'PROCESSED'\n    END AS recommended_status\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n   AND a.organization_id = i.organization_id\n\nWHERE i.id = $1::uuid\n  AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.invoice_id,\n  $json.organization_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2032,
+        64
+      ],
+      "id": "2b7a8445-394b-421a-b1d1-74f63b93907e",
+      "name": "DB - Evaluate Invoice Anomalies"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.invoices\nSET\n    processing_status = $3::text,\n    updated_at = now()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    invoice_number,\n    processing_status,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   $json.recommended_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2256,
+        64
+      ],
+      "id": "346aa7e5-260c-4b1e-8c29-fe24fdea286d",
+      "name": "DB - Update Invoice Processing Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "823a755d-5ea8-44d7-b623-bfc5cf18a735",
+              "leftValue": "={{ Math.abs(Number($json.price_variance_percent)) }}",
+              "rightValue": "={{ Number($json.tolerance_percent ?? 0) }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1136,
+        -80
+      ],
+      "id": "8ad4ef38-b2ef-4e1c-a35f-22d35e2637fc",
+      "name": "IF - Price Variance Exceeds Tolerance"
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1808,
+        64
+      ],
+      "id": "d5b1c18e-af96-46d4-b7fd-4b2424865b5d",
+      "name": "Merge - Price & Quantity Checks Complete"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c52bfc63-5d8e-4bed-8480-ad476e2e910d",
+              "name": "invoice_id",
+              "value": "={{ $('DB - Get Approved Item Pricing').item.json.invoice_id }}",
+              "type": "string"
+            },
+            {
+              "id": "883ccbef-3d34-4b14-96ee-d38499b797a6",
+              "name": "organization_id",
+              "value": "={{ $('DB - Get Approved Item Pricing').item.json.organization_id }}",
+              "type": "string"
+            },
+            {
+              "id": "3712727b-853f-4352-a870-6f1816eaba01",
+              "name": "price_check_complete",
+              "value": "={{ true }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1584,
+        -80
+      ],
+      "id": "b07ec0a4-919c-4ad3-8635-0bbc85180791",
+      "name": "Prepare - Price Check Complete"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b9572642-4f96-47d7-aa88-db4302326ceb",
+              "name": "invoice_id",
+              "value": "={{ $('DB - Get Approved Item Pricing').item.json.invoice_id }}",
+              "type": "string"
+            },
+            {
+              "id": "5f9ec2e8-3b39-48a4-99fa-2764fec83073",
+              "name": "organization_id",
+              "value": "={{ $('DB - Get Approved Item Pricing').item.json.organization_id }}",
+              "type": "string"
+            },
+            {
+              "id": "562c1f0b-16e7-4878-bc08-7c2c0589416a",
+              "name": "quantity_check_complete",
+              "value": "={{ true }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1584,
+        208
+      ],
+      "id": "1ee407d5-1fc0-4c23-b45e-85e83c9c1c68",
+      "name": "Prepare - Quantity Check Complete"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    ap.id AS approval_id,\n    ap.organization_id,\n    ap.anomaly_id,\n    ap.invoice_id,\n    ap.approval_type,\n    ap.status AS approval_status,\n    ap.requested_by,\n    ap.requested_at,\n\n    a.invoice_item_id,\n    a.supplier_id,\n    a.product_id AS candidate_product_id,\n    a.purchase_order_id,\n    a.anomaly_type,\n    a.status AS anomaly_status,\n    a.description AS anomaly_description,\n    a.evidence,\n\n    a.evidence->>'candidate_product_name'\n        AS candidate_product_name,\n\n    a.evidence->>'candidate_internal_sku'\n        AS candidate_internal_sku,\n\n    a.evidence->>'candidate_po_item_id'\n        AS candidate_po_item_id,\n\n    a.evidence->>'match_score'\n        AS match_score,\n\n    $2::text AS reviewer_name,\n    $3::text AS review_decision,\n    $4::text AS review_notes\n\nFROM public.approvals ap\n\nJOIN public.anomalies a\n    ON a.id = ap.anomaly_id\n   AND a.organization_id = ap.organization_id\n\nWHERE ap.id = $1::uuid\n  AND ap.status = 'PENDING'\n  AND ap.approval_type = 'ANOMALY_REVIEW'\n  AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [   $('Form - Product Match Decision').item.json['Approval ID'],   $('Form - Product Match Decision').item.json['Reviewer Name'],   $('Form - Product Match Decision').item.json['Decision'],   $('Form - Product Match Decision').item.json['Review Notes'] || null ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        16,
+        160
+      ],
+      "id": "fc6b0a33-e4c0-4f7e-aac9-c043368c1813",
+      "name": "DB - Get Pending Product Match Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'INVOICE',\n    $2::uuid,\n    'STATUS_CHANGE',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'PRODUCT_MATCH_APPROVAL_WORKFLOW',\n    $3::text,\n    jsonb_build_object(\n        'processing_status', $4::text\n    ),\n    jsonb_build_object(\n        'processing_status', $5::text\n    ),\n    jsonb_build_object(\n        'invoice_number', $6::text,\n        'active_anomaly_count', $7::integer,\n        'active_financial_impact', $8::numeric,\n        'workflow', 'ProcureGuard AI - Product Match Approval'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,    'Invoice \"' +     $json.invoice_number +     '\" processing status changed from \"' +     $('DB - Evaluate Invoice Anomalies').item.json.current_status +     '\" to \"' +     $json.processing_status +     '\".',    $('DB - Evaluate Invoice Anomalies').item.json.current_status,   $json.processing_status,   $json.invoice_number,   $('DB - Evaluate Invoice Anomalies').item.json.active_anomaly_count,   $('DB - Evaluate Invoice Anomalies').item.json.active_financial_impact ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2480,
+        64
+      ],
+      "id": "73aed74a-0862-440d-a0b0-d4bf134631a3",
+      "name": "DB - Log Invoice Status Change"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'APPROVE',\n    'USER',\n    $3::text,\n    'PRODUCT_MATCH_APPROVAL_FORM',\n\n    'Product match approval \"' ||\n    $2::text ||\n    '\" was approved by \"' ||\n    $3::text ||\n    '\".',\n\n    jsonb_build_object(\n        'status', 'PENDING'\n    ),\n\n    jsonb_build_object(\n        'status', 'APPROVED'\n    ),\n\n    jsonb_build_object(\n        'anomaly_id', $4::uuid,\n        'invoice_id', $5::uuid,\n        'invoice_item_id', $6::uuid,\n        'candidate_product_id', $7::uuid,\n        'purchase_order_item_id', $8::uuid,\n        'review_notes', $9::text,\n        'workflow', 'ProcureGuard AI - Product Match Approval'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.approval_id,   $json.decided_by,   $json.anomaly_id,   $json.invoice_id,   $json.invoice_item_id,   $json.product_id,   $json.purchase_order_item_id,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        688,
+        64
+      ],
+      "id": "96325ae3-eeac-4ad1-9ac0-a5ed0f0f45c2",
+      "name": "DB - Log Product Match Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'REJECT',\n    'USER',\n    $3::text,\n    'PRODUCT_MATCH_APPROVAL_FORM',\n\n    'Product match approval \"' ||\n    $2::text ||\n    '\" was rejected by \"' ||\n    $3::text ||\n    '\".',\n\n    jsonb_build_object(\n        'status', 'PENDING'\n    ),\n\n    jsonb_build_object(\n        'status', 'REJECTED'\n    ),\n\n    jsonb_build_object(\n        'anomaly_id', $4::uuid,\n        'invoice_id', $5::uuid,\n        'review_notes', $6::text,\n        'workflow', 'ProcureGuard AI - Product Match Approval'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.approval_id,   $json.decided_by,   $json.anomaly_id,   $json.invoice_id,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        688,
+        448
+      ],
+      "id": "6d6a6601-35d6-4a86-99c3-81e3afca8ec8",
+      "name": "DB - Log Product Match Rejection"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_status,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n    )::integer AS active_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'OPEN'\n    )::integer AS open_anomaly_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'UNDER_REVIEW'\n    )::integer AS under_review_count,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status = 'CONFIRMED'\n    )::integer AS confirmed_count,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ),\n        0\n    ) AS active_financial_impact,\n\n    CASE\n        WHEN COUNT(a.id) FILTER (\n            WHERE a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n        ) > 0\n        THEN 'REVIEW_REQUIRED'\n        ELSE 'PROCESSED'\n    END AS recommended_status\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n    AND a.organization_id = i.organization_id\n\nWHERE i.id = $1::uuid\n  AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1136,
+        448
+      ],
+      "id": "0d7d3620-53d7-47c7-8d53-63ac7fb5f501",
+      "name": "DB - Evaluate Rejected Invoice Anomalies"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.invoices\nSET\n    processing_status = $3::text,\n    updated_at = now()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    invoice_number,\n    processing_status,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   $json.recommended_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1360,
+        448
+      ],
+      "id": "28985393-8b8e-46ac-9000-6b27d0f374f6",
+      "name": "DB - Update Rejected Invoice Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'INVOICE',\n    $2::uuid,\n    'STATUS_CHANGE',\n    'N8N',\n    'PROCUREGUARD_N8N',\n    'PRODUCT_MATCH_REJECTION_WORKFLOW',\n\n    'Invoice \"' ||\n    $3::text ||\n    '\" processing status changed from \"PROCESSING\" to \"' ||\n    $4::text ||\n    '\" after product match rejection.',\n\n    jsonb_build_object(\n        'processing_status', 'PROCESSING'\n    ),\n\n    jsonb_build_object(\n        'processing_status', $4::text\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Product Match Approval',\n        'decision_path', 'REJECT',\n        'reason', 'REJECTED_PRODUCT_MATCH'\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_number,   $json.processing_status ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1584,
+        448
+      ],
+      "id": "db8cd305-b7b2-4c17-b7bf-a7d56755f881",
+      "name": "DB - Log Rejected Invoice Status Change"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form - Product Match Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Pending Product Match Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Approve Product Match": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Product Match Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Approved Item Pricing": {
+      "main": [
+        [
+          {
+            "node": "IF - Quantity Variance Exists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF - Price Variance Exceeds Tolerance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Approval Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Approve Product Match",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Reject Product Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Reject Product Match": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Product Match Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Quantity Variance Exists": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Quantity Variance Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare - Quantity Check Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Evaluate Invoice Anomalies": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Invoice Processing Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Price Variance Exceeds Tolerance": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Price Variance Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare - Price Check Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Quantity Variance Anomaly": {
+      "main": [
+        [
+          {
+            "node": "Prepare - Quantity Check Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Price Variance Anomaly": {
+      "main": [
+        [
+          {
+            "node": "Prepare - Price Check Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare - Price Check Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge - Price & Quantity Checks Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare - Quantity Check Complete": {
+      "main": [
+        [
+          {
+            "node": "Merge - Price & Quantity Checks Complete",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Price & Quantity Checks Complete": {
+      "main": [
+        [
+          {
+            "node": "DB - Evaluate Invoice Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Pending Product Match Approval": {
+      "main": [
+        [
+          {
+            "node": "Switch - Approval Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Update Invoice Processing Status": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Invoice Status Change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Product Match Approval": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Approved Item Pricing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Rejected Match Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Evaluate Rejected Invoice Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Product Match Rejection": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Rejected Match Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Evaluate Rejected Invoice Anomalies": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Rejected Invoice Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Update Rejected Invoice Status": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Rejected Invoice Status Change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

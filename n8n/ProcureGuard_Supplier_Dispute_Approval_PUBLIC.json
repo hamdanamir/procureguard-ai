@@ -1,0 +1,601 @@
+{
+  "name": "ProcureGuard AI - Supplier Dispute Approval",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "ProcureGuard AI — Supplier Dispute Review",
+        "formDescription": "Review a supplier dispute generated from a confirmed invoice anomaly.\n\nVerify the anomaly and supplier details, then approve or reject the dispute before any supplier communication is prepared.\n\nAll decisions are recorded in the ProcureGuard audit trail.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Approval ID",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "APPROVE"
+                  },
+                  {
+                    "option": "REJECT"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Decision Notes",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit Dispute Decision",
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Supplier dispute decision submitted successfully. ProcureGuard AI will process the decision and record it in the audit trail."
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -336,
+        -64
+      ],
+      "id": "77829b4d-4ea7-46f1-bdc8-e9aa8e367ab2",
+      "name": "Form - Supplier Dispute Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    ap.id AS approval_id,\n    ap.organization_id,\n    ap.anomaly_id,\n    ap.invoice_id,\n    ap.approval_type,\n    ap.status AS approval_status,\n    ap.requested_by,\n    ap.requested_at,\n    ap.expires_at,\n\n    a.invoice_item_id,\n    a.supplier_id,\n    a.product_id,\n    a.purchase_order_id,\n    a.anomaly_type,\n    a.severity,\n    a.status AS anomaly_status,\n    a.expected_value,\n    a.actual_value,\n    a.variance_amount,\n    a.variance_percent,\n    a.estimated_financial_impact,\n    a.description AS anomaly_description,\n    a.evidence,\n\n    i.invoice_number,\n    i.invoice_date,\n    i.due_date,\n    i.currency,\n    i.subtotal AS invoice_subtotal,\n    i.tax AS invoice_tax,\n    i.discount AS invoice_discount,\n    i.additional_charges,\n    i.total AS invoice_total,\n    i.processing_status,\n\n    s.supplier_code,\n    s.supplier_name,\n    s.contact_name AS supplier_contact_name,\n    s.email AS supplier_email,\n\n    $2::text AS reviewer_name,\n    $3::text AS review_decision,\n    $4::text AS decision_notes\n\nFROM public.approvals ap\n\nJOIN public.anomalies a\n    ON a.id = ap.anomaly_id\n   AND a.organization_id = ap.organization_id\n\nJOIN public.invoices i\n    ON i.id = ap.invoice_id\n   AND i.organization_id = ap.organization_id\n\nJOIN public.suppliers s\n    ON s.id = a.supplier_id\n   AND s.organization_id = ap.organization_id\n\nWHERE ap.id = $1::uuid\n  AND ap.approval_type = 'SUPPLIER_DISPUTE'\n  AND ap.status = 'PENDING';",
+        "options": {
+          "queryReplacement": "={{ [   $json[\"Approval ID\"],   $json[\"Reviewer Name\"],   $json[\"Decision\"],   $json[\"Decision Notes\"] ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -112,
+        -64
+      ],
+      "id": "3f368874-7095-40d1-8f49-e59d56c05444",
+      "name": "DB - Get Pending Supplier Dispute Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.approvals\nSET\n    status = 'APPROVED',\n    decided_by = $3::text,\n    decided_at = NOW(),\n    decision_notes = $4::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND approval_type = 'SUPPLIER_DISPUTE'\n  AND status = 'PENDING'\nRETURNING\n    id AS approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status AS approval_status,\n    requested_by,\n    requested_at,\n    decided_by,\n    decided_at,\n    decision_notes,\n    expires_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.approval_id,   $json.organization_id,   $json.reviewer_name,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        336,
+        -160
+      ],
+      "id": "d6e8700e-e54b-40b5-b662-e8f46c60fe76",
+      "name": "DB - Approve Supplier Dispute"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "APPROVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "4aefdca8-170a-4e13-9878-fb5908e78d7a"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "APPROVE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "28195d21-62e0-4767-8154-0bfeb0b81b53",
+                    "leftValue": "={{ $json.review_decision }}",
+                    "rightValue": "REJECT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REJECT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        112,
+        -64
+      ],
+      "id": "a52ba22a-223a-494d-903e-a4301471dc7f",
+      "name": "Switch - Supplier Dispute Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'APPROVE',\n    'USER',\n    $3::text,\n    'SUPPLIER_DISPUTE_APPROVAL_FORM',\n\n    'Supplier dispute approval \"' || $2::text ||\n    '\" was approved by \"' || $3::text || '\".',\n\n    jsonb_build_object(\n        'status', 'PENDING'\n    ),\n\n    jsonb_build_object(\n        'status', 'APPROVED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Dispute Approval',\n        'approval_type', 'SUPPLIER_DISPUTE',\n        'decision', 'APPROVE',\n        'anomaly_id', $4::uuid,\n        'invoice_id', $5::uuid,\n        'invoice_number', $6::text,\n        'supplier_id', $7::uuid,\n        'supplier_name', $8::text,\n        'anomaly_type', $9::text,\n        'severity', $10::text,\n        'estimated_financial_impact', $11::numeric,\n        'decision_notes', $12::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Approve Supplier Dispute').item.json.organization_id,   $('DB - Approve Supplier Dispute').item.json.approval_id,   $('DB - Approve Supplier Dispute').item.json.decided_by,   $('DB - Approve Supplier Dispute').item.json.anomaly_id,   $('DB - Approve Supplier Dispute').item.json.invoice_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.invoice_number,   $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_name,   $('DB - Get Pending Supplier Dispute Approval').item.json.anomaly_type,   $('DB - Get Pending Supplier Dispute Approval').item.json.severity,   $('DB - Get Pending Supplier Dispute Approval').item.json.estimated_financial_impact,   $('DB - Approve Supplier Dispute').item.json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        560,
+        -160
+      ],
+      "id": "8551819b-105d-4f29-b954-b104a06d9de4",
+      "name": "DB - Log Supplier Dispute Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.approvals\nSET\n    status = 'REJECTED',\n    decided_by = $3::text,\n    decided_at = NOW(),\n    decision_notes = $4::text,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n  AND approval_type = 'SUPPLIER_DISPUTE'\n  AND status = 'PENDING'\nRETURNING\n    id AS approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status AS approval_status,\n    requested_by,\n    requested_at,\n    decided_by,\n    decided_at,\n    decision_notes,\n    expires_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.approval_id,   $json.organization_id,   $json.reviewer_name,   $json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        336,
+        32
+      ],
+      "id": "d4ac535c-51d4-46e5-870c-6bb48b739629",
+      "name": "DB - Reject Supplier Dispute"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    $1::uuid,\n    'APPROVAL',\n    $2::uuid,\n    'REJECT',\n    'USER',\n    $3::text,\n    'SUPPLIER_DISPUTE_APPROVAL_FORM',\n\n    'Supplier dispute approval \"' || $2::text ||\n    '\" was rejected by \"' || $3::text || '\".',\n\n    jsonb_build_object(\n        'status', 'PENDING'\n    ),\n\n    jsonb_build_object(\n        'status', 'REJECTED'\n    ),\n\n    jsonb_build_object(\n        'workflow', 'ProcureGuard AI - Supplier Dispute Approval',\n        'approval_type', 'SUPPLIER_DISPUTE',\n        'decision', 'REJECT',\n        'anomaly_id', $4::uuid,\n        'invoice_id', $5::uuid,\n        'invoice_number', $6::text,\n        'supplier_id', $7::uuid,\n        'supplier_name', $8::text,\n        'anomaly_type', $9::text,\n        'severity', $10::text,\n        'estimated_financial_impact', $11::numeric,\n        'decision_notes', $12::text\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Reject Supplier Dispute').item.json.organization_id,   $('DB - Reject Supplier Dispute').item.json.approval_id,   $('DB - Reject Supplier Dispute').item.json.decided_by,   $('DB - Reject Supplier Dispute').item.json.anomaly_id,   $('DB - Reject Supplier Dispute').item.json.invoice_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.invoice_number,   $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_name,   $('DB - Get Pending Supplier Dispute Approval').item.json.anomaly_type,   $('DB - Get Pending Supplier Dispute Approval').item.json.severity,   $('DB - Get Pending Supplier Dispute Approval').item.json.estimated_financial_impact,   $('DB - Reject Supplier Dispute').item.json.decision_notes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        560,
+        32
+      ],
+      "id": "334a2cfa-4171-44ce-a28b-e509fe3ee42c",
+      "name": "DB - Log Supplier Dispute Rejection"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2c5be731-22c3-4e1f-9c8c-28b6dcb1bb2e",
+              "name": "approval_id",
+              "value": "={{ $('DB - Approve Supplier Dispute').item.json.approval_id }}",
+              "type": "string"
+            },
+            {
+              "id": "514a5338-2e0a-4210-a54a-9d0900c9e765",
+              "name": "organization_id",
+              "value": "={{ $('DB - Approve Supplier Dispute').item.json.organization_id }}",
+              "type": "string"
+            },
+            {
+              "id": "6c4edcf3-38c5-4cec-9721-d145cc91f20e",
+              "name": "invoice_id",
+              "value": "={{ $('DB - Approve Supplier Dispute').item.json.invoice_id }}",
+              "type": "string"
+            },
+            {
+              "id": "5e117e96-11da-40b0-b5c0-99418216869f",
+              "name": "invoice_number",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.invoice_number }}",
+              "type": "string"
+            },
+            {
+              "id": "c2613434-c7d3-494f-bef9-ad9ee99f8b59",
+              "name": "invoice_date",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.invoice_date }}",
+              "type": "string"
+            },
+            {
+              "id": "33c170cf-653d-4678-ab39-378acb67e6bf",
+              "name": "currency",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.currency }}",
+              "type": "string"
+            },
+            {
+              "id": "0b36f1e2-5772-4519-9c9f-e91e7d2f5278",
+              "name": "supplier_name",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_name }}",
+              "type": "string"
+            },
+            {
+              "id": "7d24901a-d0df-42f7-b56d-431dab9ce2c2",
+              "name": "supplier_contact_name",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_contact_name || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "388a0ad6-a3c4-4c8f-ac2a-2d8c35857bf7",
+              "name": "supplier_email",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_email || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "8988740e-fab3-40b1-b13d-0d059f30b82e",
+              "name": "anomaly_type",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.anomaly_type }}",
+              "type": "string"
+            },
+            {
+              "id": "8cdc63bf-e1db-4858-873c-680e63da4a4a",
+              "name": "severity",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.severity }}",
+              "type": "string"
+            },
+            {
+              "id": "70507702-b56e-42ee-bdbd-762b40f25e7f",
+              "name": "anomaly_description",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.anomaly_description }}",
+              "type": "string"
+            },
+            {
+              "id": "0e8e3d55-4801-437f-b279-1d16645362a9",
+              "name": "expected_value",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.expected_value ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a5e696b5-5e59-48f5-b8ca-595b551e8802",
+              "name": "actual_value",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.actual_value ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a215118d-0622-4c39-8191-b9c5c0ea5585",
+              "name": "variance_amount",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.variance_amount ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "88e8acdd-2b8d-4328-9bc8-1d657e61ac98",
+              "name": "variance_percent",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.variance_percent ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a92e7dc8-e06c-4ed9-9d89-b34c18a2b1f7",
+              "name": "financial_impact",
+              "value": "={{ Number($('DB - Get Pending Supplier Dispute Approval').item.json.estimated_financial_impact ?? 0) }}",
+              "type": "string"
+            },
+            {
+              "id": "a973866c-4593-435c-8f4d-1c5f117a6c68",
+              "name": "purchase_order_id",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.purchase_order_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "20113f78-5c37-430a-9e85-9194a03d2e39",
+              "name": "invoice_item_id",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.invoice_item_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f707b2c5-f2bc-41e7-9f02-b4530fddb8cb",
+              "name": "product_id",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.product_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "ecb1e2e7-2ba9-46aa-b0b4-af530d9c4fee",
+              "name": "reviewer_name",
+              "value": "={{ $('DB - Approve Supplier Dispute').item.json.decided_by }}",
+              "type": "string"
+            },
+            {
+              "id": "a727380b-06c3-4060-8394-f7ad5632d4b6",
+              "name": "decision_notes",
+              "value": "={{ $('DB - Approve Supplier Dispute').item.json.decision_notes || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "8eb655c4-79f1-4f8f-b551-754e68a1b125",
+              "name": "evidence",
+              "value": "={{ $('DB - Get Pending Supplier Dispute Approval').item.json.evidence ?? {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        784,
+        -160
+      ],
+      "id": "99b7697e-df3d-409b-b358-91f9bb09890f",
+      "name": "Prepare - Supplier Dispute Email Context"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "You are the supplier-dispute communication assistant for ProcureGuard AI.\n\nYour task is to draft a professional supplier email using ONLY the verified procurement information provided in the user message.\n\nSTRICT RULES:\n\n1. Never invent invoice details, purchase order details, product information, prices, quantities, dates, supplier details, financial values, or reasons.\n\n2. Treat anomalies as discrepancies requiring clarification. Do not accuse the supplier of fraud, misconduct, intentional overcharging, or wrongdoing.\n\n3. Use a professional, neutral, respectful procurement tone.\n\n4. Clearly identify the invoice number and the invoice item requiring clarification.\n\n5. Include relevant verified details when available:\n- invoice number\n- invoice date\n- invoice description\n- supplier SKU\n- quantity\n- unit price\n- line total\n- currency\n- estimated financial impact\n\n6. Never expose internal information, including:\n- database IDs\n- organization IDs\n- anomaly IDs\n- approval IDs\n- invoice item IDs\n- product IDs\n- internal candidate products\n- candidate matching scores\n- matching algorithms\n- workflow names\n- internal system architecture\n\n7. Never mention AI, automation, internal anomaly detection, internal confidence scores, or internal review processes.\n\n8. Do not demand payment.\n\n9. Ask the supplier to review the discrepancy and provide clarification or corrected documentation where appropriate.\n\n10. Do not claim that an email has already been sent.\n\n11. This is a DRAFT only.\n\n12. Do not include Markdown code fences.\n\nReturn ONLY valid JSON in exactly this structure:\n\n{\n  \"subject\": \"Professional email subject\",\n  \"body\": \"Complete plain-text supplier email\"\n}"
+            },
+            {
+              "content": "=Create a professional supplier discrepancy email draft using the following approved procurement information.\n\nSUPPLIER INFORMATION\n\nSupplier Name:\n{{ $json.supplier_name }}\n\nContact Name:\n{{ $json.supplier_contact_name }}\n\nSupplier Email:\n{{ $json.supplier_email }}\n\nINVOICE INFORMATION\n\nInvoice Number:\n{{ $json.invoice_number }}\n\nInvoice Date:\n{{ $json.invoice_date }}\n\nCurrency:\n{{ $json.currency }}\n\nANOMALY INFORMATION\n\nAnomaly Type:\n{{ $json.anomaly_type }}\n\nSeverity:\n{{ $json.severity }}\n\nIssue Description:\n{{ $json.anomaly_description }}\n\nEstimated Financial Impact:\n{{ $json.currency }} {{ $json.financial_impact }}\n\nINVOICE LINE EVIDENCE\n\nLine Number:\n{{ $json.evidence.invoice_line_number }}\n\nInvoice Description:\n{{ $json.evidence.invoice_description }}\n\nSupplier SKU:\n{{ $json.evidence.supplier_sku }}\n\nQuantity:\n{{ $json.evidence.invoice_quantity }}\n\nUnit Price:\n{{ $json.currency }} {{ $json.evidence.invoice_unit_price }}\n\nLine Total:\n{{ $json.currency }} {{ $json.evidence.invoice_line_total }}\n\nPROCUREMENT REVIEW NOTES\n\n{{ $json.decision_notes }}\n\nDraft a concise professional email asking the supplier to review and clarify this discrepancy.\n\nDo not mention internal candidate products, matching scores, database IDs, AI, anomaly detection systems, or internal workflow information.\n\nReturn ONLY valid JSON:\n\n{\n  \"subject\": \"...\",\n  \"body\": \"...\"\n}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1008,
+        -160
+      ],
+      "id": "6044dc4b-b220-49ea-b07c-ec19e43f34fe",
+      "name": "AI - Draft Supplier Dispute Email"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Get the OpenAI response\nconst output = $json.output;\n\n// Validate the basic OpenAI response structure\nif (!Array.isArray(output) || output.length === 0) {\n  throw new Error('AI response is missing output.');\n}\n\nconst message = output[0];\n\nif (!Array.isArray(message.content) || message.content.length === 0) {\n  throw new Error('AI response is missing message content.');\n}\n\n// Find the output_text content\nconst textBlock = message.content.find(\n  item => item.type === 'output_text'\n);\n\nif (!textBlock || !textBlock.text) {\n  throw new Error('AI response does not contain output_text.');\n}\n\nlet rawText = textBlock.text.trim();\n\n// Remove accidental Markdown JSON fences\nrawText = rawText\n  .replace(/^```json\\s*/i, '')\n  .replace(/^```\\s*/i, '')\n  .replace(/\\s*```$/i, '')\n  .trim();\n\n// Parse the AI JSON\nlet draft;\n\ntry {\n  draft = JSON.parse(rawText);\n} catch (error) {\n  throw new Error(\n    `Supplier dispute AI response is not valid JSON: ${error.message}`\n  );\n}\n\n// Validate required fields\nif (\n  typeof draft.subject !== 'string' ||\n  draft.subject.trim() === ''\n) {\n  throw new Error('Supplier dispute draft is missing a valid subject.');\n}\n\nif (\n  typeof draft.body !== 'string' ||\n  draft.body.trim() === ''\n) {\n  throw new Error('Supplier dispute draft is missing a valid body.');\n}\n\n// Clean values\nlet subject = draft.subject.trim();\nlet body = draft.body.trim();\n\n// Remove common AI-generated signature placeholders\nbody = body\n  .replace(/\\[Your Name\\]/gi, '')\n  .replace(/\\[Your Position\\]/gi, '')\n  .replace(/\\[Your Contact Information\\]/gi, '')\n  .replace(/\\[Your Company Name\\]/gi, '')\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .trim();\n\n// Basic size protection\nif (subject.length > 200) {\n  throw new Error('Generated email subject is unexpectedly long.');\n}\n\nif (body.length > 5000) {\n  throw new Error('Generated email body is unexpectedly long.');\n}\n\n// Retrieve the verified context from the Prepare node\nconst context =\n  $('Prepare - Supplier Dispute Email Context').item.json;\n\n// Final validated output\nreturn {\n  approval_id: context.approval_id,\n  organization_id: context.organization_id,\n  invoice_id: context.invoice_id,\n  invoice_number: context.invoice_number,\n\n  supplier_name: context.supplier_name,\n  supplier_contact_name: context.supplier_contact_name,\n  supplier_email: context.supplier_email,\n\n  anomaly_type: context.anomaly_type,\n  severity: context.severity,\n  currency: context.currency,\n  financial_impact: context.financial_impact,\n\n  email_subject: subject,\n  email_body: body,\n\n  draft_status: 'READY_FOR_REVIEW',\n  generated_by: 'AI',\n  validated: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        -160
+      ],
+      "id": "42255eee-9589-4ba0-b5c5-677fc2275a95",
+      "name": "Code - Validate Supplier Dispute Draft"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH inserted AS (\n    INSERT INTO public.supplier_dispute_drafts (\n        organization_id,\n        approval_id,\n        anomaly_id,\n        invoice_id,\n        supplier_id,\n        recipient_email,\n        email_subject,\n        email_body,\n        status,\n        generated_by\n    )\n    VALUES (\n        $1::uuid,\n        $2::uuid,\n        $3::uuid,\n        $4::uuid,\n        $5::uuid,\n        $6::text,\n        $7::text,\n        $8::text,\n        'PENDING_REVIEW',\n        'AI'\n    )\n    ON CONFLICT (approval_id)\n    WHERE status IN ('DRAFT', 'PENDING_REVIEW', 'APPROVED')\n    DO NOTHING\n\n    RETURNING *\n)\n\nSELECT\n    id AS draft_id,\n    organization_id,\n    approval_id AS supplier_dispute_approval_id,\n    email_approval_id,\n    anomaly_id,\n    invoice_id,\n    supplier_id,\n    recipient_email,\n    email_subject,\n    email_body,\n    status AS draft_status,\n    generated_by,\n    reviewed_by,\n    reviewed_at,\n    sent_at,\n    created_at,\n    updated_at,\n    TRUE AS draft_created\nFROM inserted\n\nUNION ALL\n\nSELECT\n    d.id AS draft_id,\n    d.organization_id,\n    d.approval_id AS supplier_dispute_approval_id,\n    d.email_approval_id,\n    d.anomaly_id,\n    d.invoice_id,\n    d.supplier_id,\n    d.recipient_email,\n    d.email_subject,\n    d.email_body,\n    d.status AS draft_status,\n    d.generated_by,\n    d.reviewed_by,\n    d.reviewed_at,\n    d.sent_at,\n    d.created_at,\n    d.updated_at,\n    FALSE AS draft_created\nFROM public.supplier_dispute_drafts d\nWHERE d.approval_id = $2::uuid\n  AND d.status IN ('DRAFT', 'PENDING_REVIEW', 'APPROVED')\n  AND NOT EXISTS (SELECT 1 FROM inserted)\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.approval_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.anomaly_id,   $json.invoice_id,   $('DB - Get Pending Supplier Dispute Approval').item.json.supplier_id,   $json.supplier_email,   $json.email_subject,   $json.email_body ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1584,
+        -160
+      ],
+      "id": "81a9b6b6-1b22-4ba3-97ad-7827f450735d",
+      "name": "DB - Save Supplier Dispute Draft"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH inserted AS (\n    INSERT INTO public.approvals (\n        organization_id,\n        anomaly_id,\n        invoice_id,\n        approval_type,\n        status,\n        requested_by,\n        requested_at\n    )\n    VALUES (\n        $1::uuid,\n        $2::uuid,\n        $3::uuid,\n        'SUPPLIER_EMAIL',\n        'PENDING',\n        'PROCUREGUARD_N8N',\n        NOW()\n    )\n    ON CONFLICT (\n        organization_id,\n        anomaly_id,\n        invoice_id\n    )\n    WHERE approval_type = 'SUPPLIER_EMAIL'\n      AND status = 'PENDING'\n    DO NOTHING\n\n    RETURNING *\n)\n\nSELECT\n    id AS email_approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status AS email_approval_status,\n    requested_by,\n    requested_at,\n    TRUE AS approval_created\nFROM inserted\n\nUNION ALL\n\nSELECT\n    a.id AS email_approval_id,\n    a.organization_id,\n    a.anomaly_id,\n    a.invoice_id,\n    a.approval_type,\n    a.status AS email_approval_status,\n    a.requested_by,\n    a.requested_at,\n    FALSE AS approval_created\nFROM public.approvals a\nWHERE a.organization_id = $1::uuid\n  AND a.anomaly_id = $2::uuid\n  AND a.invoice_id = $3::uuid\n  AND a.approval_type = 'SUPPLIER_EMAIL'\n  AND a.status = 'PENDING'\n  AND NOT EXISTS (SELECT 1 FROM inserted)\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('DB - Save Supplier Dispute Draft').item.json.organization_id,\n  $('DB - Save Supplier Dispute Draft').item.json.anomaly_id,\n  $('DB - Save Supplier Dispute Draft').item.json.invoice_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1808,
+        -160
+      ],
+      "id": "3b01639b-ee2f-47e6-ad59-f17da4f87b91",
+      "name": "DB - Create or Reuse Supplier Email Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.supplier_dispute_drafts\nSET\n    email_approval_id = $2::uuid,\n    updated_at = NOW()\nWHERE id = $1::uuid\n  AND organization_id = $3::uuid\n  AND status IN ('DRAFT', 'PENDING_REVIEW', 'APPROVED')\n  AND (\n      email_approval_id IS NULL\n      OR email_approval_id = $2::uuid\n  )\nRETURNING\n    id AS draft_id,\n    organization_id,\n    approval_id AS supplier_dispute_approval_id,\n    email_approval_id,\n    anomaly_id,\n    invoice_id,\n    supplier_id,\n    recipient_email,\n    email_subject,\n    status AS draft_status,\n    generated_by,\n    reviewed_by,\n    reviewed_at,\n    sent_at,\n    created_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Save Supplier Dispute Draft').item.json.draft_id,   $('DB - Create or Reuse Supplier Email Approval').item.json.email_approval_id,   $('DB - Save Supplier Dispute Draft').item.json.organization_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2032,
+        -160
+      ],
+      "id": "53f81594-2bce-4bd2-8f26-8608b25ed90f",
+      "name": "DB - Link Email Approval to Draft"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form - Supplier Dispute Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Pending Supplier Dispute Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Pending Supplier Dispute Approval": {
+      "main": [
+        [
+          {
+            "node": "Switch - Supplier Dispute Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Supplier Dispute Decision": {
+      "main": [
+        [
+          {
+            "node": "DB - Approve Supplier Dispute",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Reject Supplier Dispute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Approve Supplier Dispute": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Dispute Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Reject Supplier Dispute": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Supplier Dispute Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Supplier Dispute Approval": {
+      "main": [
+        [
+          {
+            "node": "Prepare - Supplier Dispute Email Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare - Supplier Dispute Email Context": {
+      "main": [
+        [
+          {
+            "node": "AI - Draft Supplier Dispute Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Draft Supplier Dispute Email": {
+      "main": [
+        [
+          {
+            "node": "Code - Validate Supplier Dispute Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Validate Supplier Dispute Draft": {
+      "main": [
+        [
+          {
+            "node": "DB - Save Supplier Dispute Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Save Supplier Dispute Draft": {
+      "main": [
+        [
+          {
+            "node": "DB - Create or Reuse Supplier Email Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create or Reuse Supplier Email Approval": {
+      "main": [
+        [
+          {
+            "node": "DB - Link Email Approval to Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

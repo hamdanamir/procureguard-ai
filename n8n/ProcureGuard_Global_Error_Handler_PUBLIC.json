@@ -1,0 +1,181 @@
+{
+  "name": "ProcureGuard AI - Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        -240
+      ],
+      "id": "01ffa6c2-0f55-40d7-8f05-8419b07c5ab0",
+      "name": "Error Trigger - Workflow Failure"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ProcureGuard AI - Normalize Global Workflow Error\n// ============================================================\n\nconst input = $input.first().json;\n\n// Error Trigger payload can differ depending on how/where\n// the source workflow failed.\nconst execution = input.execution || {};\nconst workflow = input.workflow || {};\nconst trigger = input.trigger || {};\n\nconst error =\n  execution.error ||\n  input.error ||\n  {};\n\nconst workflowName =\n  workflow.name ||\n  input.workflowName ||\n  \"Unknown Workflow\";\n\nconst workflowId =\n  workflow.id ||\n  input.workflowId ||\n  null;\n\nconst executionId =\n  execution.id ||\n  input.executionId ||\n  null;\n\nconst executionUrl =\n  execution.url ||\n  null;\n\nconst lastNodeExecuted =\n  execution.lastNodeExecuted ||\n  input.lastNodeExecuted ||\n  null;\n\nconst errorMessage =\n  error.message ||\n  input.message ||\n  \"Unknown workflow execution error.\";\n\nconst errorDescription =\n  error.description ||\n  null;\n\nconst errorStack =\n  error.stack ||\n  null;\n\n// ------------------------------------------------------------\n// Classify severity\n// ------------------------------------------------------------\n\nconst messageForClassification =\n  `${errorMessage} ${errorDescription || \"\"}`.toLowerCase();\n\nconst criticalPatterns = [\n  \"authentication\",\n  \"unauthorized\",\n  \"credential\",\n  \"database\",\n  \"connection refused\",\n  \"connection terminated\",\n  \"timeout\",\n  \"out of memory\",\n  \"permission denied\",\n];\n\nconst isCritical =\n  criticalPatterns.some(pattern =>\n    messageForClassification.includes(pattern)\n  );\n\nconst severity =\n  isCritical ? \"CRITICAL\" : \"ERROR\";\n\n// ------------------------------------------------------------\n// Return normalized error\n// ------------------------------------------------------------\n\nreturn [\n  {\n    json: {\n      workflow_name: String(workflowName),\n\n      workflow_id:\n        workflowId ? String(workflowId) : null,\n\n      workflow_execution_id:\n        executionId ? String(executionId) : null,\n\n      execution_url:\n        executionUrl ? String(executionUrl) : null,\n\n      failed_node:\n        lastNodeExecuted\n          ? String(lastNodeExecuted)\n          : null,\n\n      error_message:\n        String(errorMessage),\n\n      error_description:\n        errorDescription\n          ? String(errorDescription)\n          : null,\n\n      error_stack:\n        errorStack\n          ? String(errorStack).slice(0, 10000)\n          : null,\n\n      severity,\n\n      requires_alert:\n        severity === \"CRITICAL\",\n\n      source:\n        \"N8N_GLOBAL_ERROR_HANDLER\",\n\n      captured_at:\n        new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        -240
+      ],
+      "id": "f99bf868-fa64-4b9f-a088-b2c0367642b4",
+      "name": "Code - Normalize Workflow Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.processing_errors (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n\n    error_stage,\n    error_code,\n    error_message,\n    technical_details,\n\n    severity,\n    status,\n    retry_count,\n\n    workflow_name,\n    workflow_execution_id,\n\n    source_message_id,\n    context,\n\n    occurred_at\n)\nVALUES (\n    NULL,\n    NULL,\n    NULL,\n\n    'UNKNOWN',\n    'N8N_WORKFLOW_FAILURE',\n\n    $1::text,\n    $2::text,\n\n    $3::text,\n    'OPEN',\n    0,\n\n    $4::text,\n    $5::text,\n\n    NULL,\n\n    jsonb_build_object(\n        'workflow_id',\n        NULLIF($6::text, ''),\n\n        'failed_node',\n        NULLIF($7::text, ''),\n\n        'execution_url',\n        NULLIF($8::text, ''),\n\n        'error_description',\n        NULLIF($9::text, ''),\n\n        'source',\n        $10::text,\n\n        'captured_at',\n        $11::text,\n\n        'requires_alert',\n        $12::boolean\n    ),\n\n    NOW()\n)\nRETURNING\n    id AS processing_error_id,\n\n    organization_id,\n\n    error_stage,\n    error_code,\n    error_message,\n\n    severity,\n    status,\n\n    retry_count,\n\n    workflow_name,\n    workflow_execution_id,\n\n    context,\n\n    occurred_at,\n\n    (context->>'requires_alert')::boolean\n        AS requires_alert;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.error_message || \"Unknown workflow execution error.\",\n\n  $json.error_stack || \"\",\n\n  $json.severity || \"ERROR\",\n\n  $json.workflow_name || \"Unknown Workflow\",\n\n  $json.workflow_execution_id || \"\",\n\n  $json.workflow_id || \"\",\n\n  $json.failed_node || \"\",\n\n  $json.execution_url || \"\",\n\n  $json.error_description || \"\",\n\n  $json.source || \"N8N_GLOBAL_ERROR_HANDLER\",\n\n  $json.captured_at || new Date().toISOString(),\n\n  $json.requires_alert === true\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        304,
+        -240
+      ],
+      "id": "a4fe5733-f4a0-4b2e-a22e-95d140221dfa",
+      "name": "DB - Log Workflow Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "399e6b29-a601-4e1d-9142-e8a800ebc3e2",
+              "leftValue": "={{ $json.requires_alert }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        528,
+        -240
+      ],
+      "id": "5a6cb308-13dd-4b64-b1df-a1a8cba8ed4e",
+      "name": "IF - Critical Error?",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.alert_recipient }}",
+        "subject": "={{ \"[CRITICAL] ProcureGuard AI Workflow Failure - \" + ($json.workflow_name || \"Unknown Workflow\") }}",
+        "emailType": "text",
+        "message": "={{ `PROCUREGUARD AI CRITICAL WORKFLOW FAILURE  A critical automation failure has been detected.  -------------------------------- WORKFLOW INFORMATION --------------------------------  Workflow: ${$json.workflow_name || \"Unknown Workflow\"}  Execution ID: ${$json.workflow_execution_id || \"N/A\"}  Severity: ${$json.severity || \"CRITICAL\"}  Status: ${$json.status || \"OPEN\"}   -------------------------------- ERROR INFORMATION --------------------------------  Error Code: ${$json.error_code || \"N8N_WORKFLOW_FAILURE\"}  Error Message: ${$json.error_message || \"Unknown workflow execution error.\"}   -------------------------------- SYSTEM RECORD --------------------------------  Processing Error ID: ${$json.processing_error_id || \"N/A\"}  Occurred At: ${$json.occurred_at || \"N/A\"}   -------------------------------- INVESTIGATION --------------------------------  This failure has automatically been recorded in the ProcureGuard AI processing_errors table.  Review the failed workflow execution and resolve the underlying problem before retrying affected business operations.  — ProcureGuard AI Monitoring ` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        976,
+        -240
+      ],
+      "id": "b5596a6d-a487-4d97-9a96-df117c55a1b9",
+      "name": "Gmail - Send Critical Error Alert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    ss.id AS setting_id,\n    ss.setting_key,\n    ss.setting_value AS alert_recipient,\n    ss.is_enabled,\n\n    $1::uuid AS processing_error_id,\n    $2::text AS error_code,\n    $3::text AS error_message,\n    $4::text AS severity,\n    $5::text AS status,\n    $6::text AS workflow_name,\n    $7::text AS workflow_execution_id,\n    $8::timestamptz AS occurred_at,\n\n    $9::jsonb AS error_context\n\nFROM public.system_settings ss\n\nWHERE ss.setting_key = 'SYSTEM_ALERT_EMAIL'\n  AND ss.is_enabled = true\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [   $json.processing_error_id,   $json.error_code || \"N8N_WORKFLOW_FAILURE\",   $json.error_message || \"Unknown workflow execution error.\",   $json.severity || \"ERROR\",   $json.status || \"OPEN\",   $json.workflow_name || \"Unknown Workflow\",   $json.workflow_execution_id || \"\",   $json.occurred_at,   JSON.stringify($json.context || {}) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        752,
+        -240
+      ],
+      "id": "8d61d144-7eff-4bef-b005-93c653131f63",
+      "name": "DB - Get System Alert Configuration"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger - Workflow Failure": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Normalize Workflow Error": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Workflow Error": {
+      "main": [
+        [
+          {
+            "node": "IF - Critical Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Critical Error?": {
+      "main": [
+        [
+          {
+            "node": "DB - Get System Alert Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get System Alert Configuration": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Send Critical Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

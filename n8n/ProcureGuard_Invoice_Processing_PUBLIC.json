@@ -1,0 +1,1742 @@
+{
+  "name": "ProcureGuard AI - Invoice Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "REPLACE_WITH_GMAIL_LABEL_ID"
+          ]
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -9312,
+        640
+      ],
+      "id": "259b6763-293f-4168-87cf-729a75a46246",
+      "name": "Gmail - New Supplier Invoice"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "61fc7154-4483-483c-ae61-86e1975090d0",
+              "leftValue": "={{ $binary.attachment_0?.mimeType }}",
+              "rightValue": "=application/pdf",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "ae9e1153-e748-4a8c-b0ba-8003139990d5",
+              "leftValue": "={{ $binary.attachment_0 !== undefined }}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -9088,
+        576
+      ],
+      "id": "f6716d78-215b-4fb3-bcf0-981ab642d330",
+      "name": "IF - Valid PDF Attachment"
+    },
+    {
+      "parameters": {
+        "binaryData": true,
+        "binaryPropertyName": "attachment_0",
+        "dataPropertyName": "document_hash"
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        -8864,
+        576
+      ],
+      "id": "1adcce71-cfc5-4afe-b9f7-c6f3c5738aea",
+      "name": "Crypto - Generate PDF Hash"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    id,\n    invoice_number,\n    supplier_id,\n    document_hash,\n    processing_status,\n    created_at\nFROM public.invoices\nWHERE document_hash = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $json.document_hash }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -8640,
+        576
+      ],
+      "id": "6a5a9224-651a-40f1-9a01-5533278456d1",
+      "name": "DB - Check Document Hash",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6ffadc5c-9085-428a-a56b-078e552264b5",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -8416,
+        576
+      ],
+      "id": "34328816-430c-44b1-8824-d016c93fc2b4",
+      "name": "IF - Duplicate Document?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "db2fc6a0-ee50-4484-9a79-fe2040cb575e",
+              "name": "document_hash",
+              "value": "={{ $('Crypto - Generate PDF Hash').item.json.document_hash }}",
+              "type": "string"
+            },
+            {
+              "id": "bc65b451-853d-4615-a0aa-efbbd457fc72",
+              "name": "gmail_message_id",
+              "value": "={{ $('Gmail - New Supplier Invoice').item.json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "424cc59e-6a1f-4d99-8d0b-b89074377b55",
+              "name": "=email_subject",
+              "value": "={{ $('Gmail - New Supplier Invoice').item.json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "50105f67-27fc-4a0b-85a9-f12ae7412c21",
+              "name": "sender_email",
+              "value": "={{ $('Gmail - New Supplier Invoice').item.json.from.value[0].address }}",
+              "type": "string"
+            },
+            {
+              "id": "816f7ffd-1996-4529-9666-74a058d2b4b2",
+              "name": "sender_name",
+              "value": "={{ $('Gmail - New Supplier Invoice').item.json.from.value[0].name }}",
+              "type": "string"
+            },
+            {
+              "id": "7d6409f1-3c02-4e53-9e39-97526564333d",
+              "name": "received_at",
+              "value": "={{ $('Gmail - New Supplier Invoice').item.json.date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "stripBinary": false
+        }
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -8192,
+        576
+      ],
+      "id": "2239e826-5061-47a0-b108-065831ce4410",
+      "name": "Prepare - Invoice Context"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -7968,
+        640
+      ],
+      "id": "d4f91b97-2b46-4925-a56b-65489e29dbcf",
+      "name": "Merge - Restore Invoice PDF"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -7744,
+        640
+      ],
+      "id": "d6a64335-31fc-4f61-8fe8-dffb701a7300",
+      "name": "PDF - Extract Invoice Text"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "={{ `You are an invoice data extraction system for ProcureGuard AI.\n\nYour job is to extract structured procurement data from supplier invoice text.\n\nIMPORTANT RULES:\n1. Extract only information explicitly present in the invoice.\n2. Never invent or guess missing values.\n3. If a field is missing, return null.\n4. Monetary values must be numbers only, without commas or currency symbols.\n5. Quantities must be numbers.\n6. Convert invoice_date to YYYY-MM-DD when the date can be determined unambiguously.\n7. Preserve SKU/product codes exactly as written.\n8. Return ONLY valid JSON.\n9. Do not include Markdown.\n10. Do not include explanations.\n11. Do not wrap the JSON in code fences.\n12. Every invoice line item must appear in the items array.\n\nReturn exactly this structure:\n\n{\n  \"supplier_name\": null,\n  \"supplier_code\": null,\n  \"invoice_number\": null,\n  \"po_number\": null,\n  \"invoice_date\": null,\n  \"currency\": null,\n  \"subtotal\": null,\n  \"tax\": null,\n  \"discount\": null,\n  \"additional_charges\": null,\n  \"total\": null,\n  \"items\": [\n    {\n      \"description\": null,\n      \"supplier_sku\": null,\n      \"quantity\": null,\n      \"unit_price\": null,\n      \"line_total\": null\n    }\n  ]\n}\n\nINVOICE TEXT:\n\n${$json.text}` }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        -7520,
+        640
+      ],
+      "id": "007b0a69-ee4a-4c4e-a38c-e337699da4ff",
+      "name": "AI - Extract Invoice Data"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.output?.[0]?.content?.[0]?.text;\n\nif (!raw) {\n  throw new Error('AI invoice extraction returned no text.');\n}\n\nlet invoice;\n\ntry {\n  invoice = JSON.parse(raw);\n} catch (error) {\n  throw new Error(`AI returned invalid JSON: ${error.message}`);\n}\n\nconst requiredFields = [\n  'supplier_name',\n  'invoice_number',\n  'invoice_date',\n  'currency',\n  'total',\n  'items'\n];\n\nfor (const field of requiredFields) {\n  if (invoice[field] === undefined || invoice[field] === null) {\n    throw new Error(`Required invoice field is missing: ${field}`);\n  }\n}\n\nif (!Array.isArray(invoice.items) || invoice.items.length === 0) {\n  throw new Error('Invoice contains no valid line items.');\n}\n\nreturn {\n  json: invoice\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -7168,
+        640
+      ],
+      "id": "42842897-4c61-4565-905d-ae97beeafacd",
+      "name": "Code - Parse Invoice JSON"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    id,\n    organization_id,\n    supplier_code,\n    supplier_name,\n    email,\n    status\nFROM public.suppliers\nWHERE supplier_code = $1\n  AND status = 'ACTIVE'\nLIMIT 1;\n",
+        "options": {
+          "queryReplacement": "=={{ $json.supplier_code }}\n"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6944,
+        640
+      ],
+      "id": "0029d302-df1f-46c4-bc4c-df493f32ad96",
+      "name": "DB - Match Supplier",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0b3bfd5f-79bc-44f6-86b6-17fb2be727ec",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -6720,
+        640
+      ],
+      "id": "48f57cf2-c06c-4d14-9e84-4140b176f863",
+      "name": "IF - Supplier Found?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT po.*\nFROM public.purchase_orders po\nWHERE po.po_number = $1\n  AND po.supplier_id = $2\n  AND po.organization_id = $3\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ $('Code - Parse Invoice JSON').item.json.po_number }}\n{{ $('DB - Match Supplier').item.json.id }}\n{{ $('DB - Match Supplier').item.json.organization_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6496,
+        640
+      ],
+      "id": "18fdf6eb-f69e-48e8-903d-cb6ab6d978af",
+      "name": "DB - Match Purchase Order",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a25b8fd1-7e4b-4bf8-a51e-88bd9b4798ce",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -6272,
+        640
+      ],
+      "id": "3108c394-2eae-473a-b2d1-be8c3cd3ea48",
+      "name": "IF - Purchase Order Found?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    poi.id AS po_item_id,\n    poi.line_number,\n    poi.product_id,\n    poi.description_from_po,\n    poi.ordered_quantity,\n    poi.unit_price AS po_unit_price,\n    poi.discount AS po_discount,\n    poi.tax AS po_tax,\n    poi.line_total AS po_line_total,\n    poi.received_quantity,\n    p.*\nFROM public.purchase_order_items poi\nJOIN public.products p\n    ON p.id = poi.product_id\n   AND p.organization_id = poi.organization_id\nWHERE poi.purchase_order_id = $1\nORDER BY poi.line_number ASC;",
+        "options": {
+          "queryReplacement": "={{ $('DB - Match Purchase Order').item.json.id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6048,
+        448
+      ],
+      "id": "bcc0a3eb-0efd-445d-9679-dfd32de9b989",
+      "name": "DB - Get PO Products",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    sp.*,\n    p.sku AS internal_sku,\n    p.product_name AS internal_product_name\nFROM public.supplier_products sp\nJOIN public.products p\n    ON p.id = sp.product_id\n   AND p.organization_id = sp.organization_id\nWHERE sp.supplier_id = $1\n  AND sp.organization_id = $2\nORDER BY p.sku;",
+        "options": {
+          "queryReplacement": "={{ $('DB - Match Supplier').item.json.id }}\n{{ $('DB - Match Supplier').item.json.organization_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6048,
+        1024
+      ],
+      "id": "3801414f-e3db-463f-87f9-d52854246b11",
+      "name": "DB - Get Supplier Product Mappings",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    pa.*,\n    p.sku AS internal_sku,\n    p.product_name AS internal_product_name\nFROM public.product_aliases pa\nJOIN public.products p\n    ON p.id = pa.product_id\n   AND p.organization_id = pa.organization_id\nWHERE pa.organization_id = $1\n  AND pa.supplier_id = $2\n  AND pa.status = 'ACTIVE'\nORDER BY p.sku;",
+        "options": {
+          "queryReplacement": "={{ $('DB - Match Supplier').item.json.organization_id }}\n{{ $('DB - Match Supplier').item.json.id }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6048,
+        256
+      ],
+      "id": "c9a4fa5e-2e15-46ec-90cd-22b99aa47112",
+      "name": "DB - Get Product Aliases",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const invoice = $('Code - Parse Invoice JSON').first().json;\nconst createdInvoice = $input.first().json;\n\nif (!createdInvoice.invoice_id) {\n  throw new Error('Created invoice ID is missing.');\n}\n\nif (!createdInvoice.organization_id) {\n  throw new Error('Organization ID is missing.');\n}\n\nif (!createdInvoice.supplier_id) {\n  throw new Error('Supplier ID is missing.');\n}\n\nif (!Array.isArray(invoice.items) || invoice.items.length === 0) {\n  throw new Error('Invoice contains no line items.');\n}\n\nreturn invoice.items.map((item, index) => ({\n  json: {\n    invoice_id: createdInvoice.invoice_id,\n\n    invoice_line_number: index + 1,\n\n    organization_id: createdInvoice.organization_id,\n    supplier_id: createdInvoice.supplier_id,\n    purchase_order_id: createdInvoice.purchase_order_id,\n\n    supplier_name: invoice.supplier_name,\n    supplier_code: invoice.supplier_code,\n\n    invoice_number: invoice.invoice_number,\n    invoice_date: invoice.invoice_date,\n\n    po_number: invoice.po_number,\n    currency: invoice.currency,\n\n    description: item.description,\n    supplier_sku: item.supplier_sku,\n\n    quantity: Number(item.quantity),\n    unit_price: Number(item.unit_price),\n    line_total: Number(item.line_total)\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5376,
+        960
+      ],
+      "id": "d25a815a-738e-44f8-aa88-0ad7f1d07361",
+      "name": "Code - Split Invoice Items"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    $1::uuid AS organization_id,\n    $2::uuid AS supplier_id,\n    $3::uuid AS purchase_order_id,\n    $4::date AS invoice_date,\n\n    $5::uuid AS invoice_id,\n    $6::uuid AS invoice_item_id,\n\n    $7::integer AS invoice_line_number,\n    $8::text AS invoice_supplier_sku,\n    $9::text AS invoice_description,\n    $10::numeric AS invoice_quantity,\n    $11::numeric AS invoice_unit_price,\n    $12::numeric AS invoice_line_total,\n\n    p.id AS product_id,\n    p.sku AS internal_sku,\n    p.product_name AS internal_product_name,\n\n    poi.id AS po_item_id,\n    poi.line_number AS po_line_number,\n    poi.description_from_po,\n    poi.ordered_quantity,\n    poi.unit_price AS po_unit_price,\n\n    sp.supplier_sku AS mapped_supplier_sku,\n    sp.agreed_unit_price,\n    sp.tolerance_percent,\n\n    pa.alias_name,\n    pa.normalized_alias,\n    pa.confidence_score\n\nFROM public.products p\n\nJOIN public.purchase_order_items poi\n    ON poi.product_id = p.id\n    AND poi.organization_id = p.organization_id\n    AND poi.purchase_order_id = $3::uuid\n\nLEFT JOIN public.supplier_products sp\n    ON sp.product_id = p.id\n    AND sp.organization_id = p.organization_id\n    AND sp.supplier_id = $2::uuid\n    AND sp.status = 'ACTIVE'\n    AND sp.effective_from <= $4::date\n    AND (\n        sp.effective_to IS NULL\n        OR sp.effective_to >= $4::date\n    )\n\nLEFT JOIN public.product_aliases pa\n    ON pa.product_id = p.id\n    AND pa.organization_id = p.organization_id\n    AND pa.supplier_id = $2::uuid\n    AND pa.status = 'ACTIVE'\n\nWHERE p.organization_id = $1::uuid\n  AND p.status = 'ACTIVE'\n\nORDER BY poi.line_number;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.supplier_id,\n  $json.purchase_order_id,\n  $json.invoice_date,\n  $json.invoice_id,\n  $json.invoice_item_id,\n  $json.invoice_line_number,\n  $json.invoice_supplier_sku,\n  $json.invoice_description,\n  $json.invoice_quantity,\n  $json.invoice_unit_price,\n  $json.invoice_line_total\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -4704,
+        960
+      ],
+      "id": "b6f8c42f-4234-40d4-b420-2be747dd8791",
+      "name": "DB - Find Product Candidates",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidates = $input.all().map(item => item.json);\n\nfunction normalize(value) {\n  return String(value ?? '')\n    .toLowerCase()\n    .replace(/litre/g, 'liter')\n    .replace(/[^a-z0-9]+/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction tokens(value) {\n  return normalize(value)\n    .split(' ')\n    .filter(word => word.length > 1);\n}\n\nfunction similarity(a, b) {\n  const aTokens = new Set(tokens(a));\n  const bTokens = new Set(tokens(b));\n\n  if (aTokens.size === 0 || bTokens.size === 0) {\n    return 0;\n  }\n\n  let matches = 0;\n\n  for (const word of aTokens) {\n    if (bTokens.has(word)) {\n      matches++;\n    }\n  }\n\n  return matches / Math.max(aTokens.size, bTokens.size);\n}\n\nconst grouped = {};\n\nfor (const row of candidates) {\n  const line = Number(row.invoice_line_number);\n\n  if (!grouped[line]) {\n    grouped[line] = [];\n  }\n\n  const invoiceSku = normalize(row.invoice_supplier_sku);\n  const mappedSku = normalize(row.mapped_supplier_sku);\n  const internalSku = normalize(row.internal_sku);\n\n  const productNameSimilarity = similarity(\n    row.invoice_description,\n    row.internal_product_name\n  );\n\n  const poDescriptionSimilarity = similarity(\n    row.invoice_description,\n    row.description_from_po\n  );\n\n  const aliasSimilarity = similarity(\n    row.invoice_description,\n    row.alias_name\n  );\n\n  let score = 0;\n  const reasons = [];\n\n  // Strongest evidence: exact supplier SKU\n  if (invoiceSku && mappedSku && invoiceSku === mappedSku) {\n    score += 60;\n    reasons.push('exact_supplier_sku');\n  }\n\n  // Exact internal SKU\n  if (invoiceSku && internalSku && invoiceSku === internalSku) {\n    score += 50;\n    reasons.push('exact_internal_sku');\n  }\n\n  // Product name similarity\n  if (productNameSimilarity >= 0.8) {\n    score += 35;\n    reasons.push('strong_product_name');\n  } else if (productNameSimilarity >= 0.5) {\n    score += 20;\n    reasons.push('partial_product_name');\n  }\n\n  // PO description similarity\n  if (poDescriptionSimilarity >= 0.8) {\n    score += 30;\n    reasons.push('strong_po_description');\n  } else if (poDescriptionSimilarity >= 0.5) {\n    score += 15;\n    reasons.push('partial_po_description');\n  }\n\n  // Human-verified alias similarity\n  if (aliasSimilarity >= 0.8) {\n    score += 35;\n    reasons.push('strong_verified_alias');\n  } else if (aliasSimilarity >= 0.5) {\n    score += 20;\n    reasons.push('partial_verified_alias');\n  }\n\n  // Quantity is only supporting evidence\n  const invoiceQty = Number(row.invoice_quantity);\n  const orderedQty = Number(row.ordered_quantity);\n\n  if (\n    Number.isFinite(invoiceQty) &&\n    Number.isFinite(orderedQty) &&\n    invoiceQty === orderedQty\n  ) {\n    score += 10;\n    reasons.push('quantity_matches_po');\n  }\n\n  grouped[line].push({\n    ...row,\n\n    product_name_similarity:\n      Number(productNameSimilarity.toFixed(3)),\n\n    po_description_similarity:\n      Number(poDescriptionSimilarity.toFixed(3)),\n\n    alias_similarity:\n      Number(aliasSimilarity.toFixed(3)),\n\n    match_score: score,\n    match_reasons: reasons\n  });\n}\n\nconst results = [];\n\nfor (const line of Object.keys(grouped)) {\n  const lineCandidates = grouped[line];\n\n  lineCandidates.sort(\n    (a, b) => b.match_score - a.match_score\n  );\n\n  const best = lineCandidates[0];\n  const second = lineCandidates[1];\n\n  const scoreGap = second\n    ? best.match_score - second.match_score\n    : best.match_score;\n\n  let matchStatus = 'UNMATCHED';\n\n  if (best.match_score >= 60 && scoreGap >= 15) {\n    matchStatus = 'MATCHED';\n  } else if (best.match_score >= 35 && scoreGap >= 10) {\n    matchStatus = 'REVIEW';\n  }\n\n  results.push({\n    json: {\n      ...best,\n\n      second_best_score:\n        second ? second.match_score : null,\n\n      score_gap: scoreGap,\n      match_status: matchStatus,\n      candidate_count: lineCandidates.length\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4480,
+        960
+      ],
+      "id": "cb1af962-26cf-4b97-ad13-d9ab681abc34",
+      "name": "Code - Score Product Candidates",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.match_status }}",
+                    "rightValue": "MATCHED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "766245da-33fb-4ff3-90f1-feb22d203ac7"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "MATCHED"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "ea36702e-c785-4912-a426-c6210ac66c27",
+                    "leftValue": "={{ $json.match_status }}",
+                    "rightValue": "REVIEW",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REVIEW"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "1004fded-0b0f-4038-8542-a91600ea47ee",
+                    "leftValue": "={{ $json.match_status }}",
+                    "rightValue": "UNMATCHED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "UNMATCHED"
+            }
+          ]
+        },
+        "looseTypeValidation": "={{ false }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -4256,
+        944
+      ],
+      "id": "1a7a9994-0d4e-4c9c-b39f-290b50d7ce4a",
+      "name": "Switch - Product Match Status",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH invoice_input AS (\n    SELECT\n        $1::uuid AS organization_id,\n        $2::uuid AS supplier_id,\n        $3::uuid AS purchase_order_id,\n        $4::date AS invoice_date,\n\n        $5::uuid AS invoice_id,\n        $6::uuid AS invoice_item_id,\n\n        $7::integer AS invoice_line_number,\n        $8::text AS invoice_supplier_sku,\n        $9::text AS invoice_description,\n        $10::numeric AS invoice_quantity,\n        $11::numeric AS invoice_unit_price,\n        $12::numeric AS invoice_line_total\n),\n\ncatalog_match AS (\n    SELECT\n        p.id AS catalog_product_id,\n        p.sku AS catalog_sku,\n        p.product_name AS catalog_product_name,\n\n        sp.supplier_sku AS catalog_supplier_sku,\n        sp.agreed_unit_price,\n        sp.tolerance_percent,\n\n        pa.alias_name,\n        pa.normalized_alias,\n        pa.confidence_score,\n\n        CASE\n            WHEN lower(trim(COALESCE(sp.supplier_sku, '')))\n                 = lower(trim(i.invoice_supplier_sku))\n            THEN 'EXACT_SUPPLIER_SKU'\n\n            WHEN lower(trim(COALESCE(pa.normalized_alias, '')))\n                 = lower(trim(i.invoice_description))\n            THEN 'EXACT_ALIAS'\n\n            ELSE NULL\n        END AS catalog_match_method\n\n    FROM invoice_input i\n\n    JOIN public.products p\n      ON p.organization_id = i.organization_id\n     AND p.status = 'ACTIVE'\n\n    LEFT JOIN public.supplier_products sp\n      ON sp.product_id = p.id\n     AND sp.organization_id = p.organization_id\n     AND sp.supplier_id = i.supplier_id\n     AND sp.status = 'ACTIVE'\n     AND sp.effective_from <= i.invoice_date\n     AND (\n          sp.effective_to IS NULL\n          OR sp.effective_to >= i.invoice_date\n     )\n\n    LEFT JOIN public.product_aliases pa\n      ON pa.product_id = p.id\n     AND pa.organization_id = p.organization_id\n     AND pa.supplier_id = i.supplier_id\n     AND pa.status = 'ACTIVE'\n\n    WHERE\n        lower(trim(COALESCE(sp.supplier_sku, '')))\n            = lower(trim(i.invoice_supplier_sku))\n\n        OR\n\n        lower(trim(COALESCE(pa.normalized_alias, '')))\n            = lower(trim(i.invoice_description))\n\n    ORDER BY\n        CASE\n            WHEN lower(trim(COALESCE(sp.supplier_sku, '')))\n                 = lower(trim(i.invoice_supplier_sku))\n            THEN 1\n            ELSE 2\n        END,\n        pa.confidence_score DESC NULLS LAST\n\n    LIMIT 1\n)\n\nSELECT\n    i.organization_id,\n    i.supplier_id,\n    i.purchase_order_id,\n    i.invoice_date,\n\n    i.invoice_id,\n    i.invoice_item_id,\n\n    i.invoice_line_number,\n    i.invoice_supplier_sku,\n    i.invoice_description,\n    i.invoice_quantity,\n    i.invoice_unit_price,\n    i.invoice_line_total,\n\n    cm.catalog_product_id,\n    cm.catalog_sku,\n    cm.catalog_product_name,\n    cm.catalog_supplier_sku,\n    cm.agreed_unit_price,\n    cm.tolerance_percent,\n    cm.alias_name,\n    cm.normalized_alias,\n    cm.confidence_score,\n\n    COALESCE(\n        cm.catalog_match_method,\n        'NO_EXACT_CATALOG_MATCH'\n    ) AS catalog_match_method,\n\n    CASE\n        WHEN cm.catalog_product_id IS NOT NULL\n        THEN true\n        ELSE false\n    END AS catalog_product_found\n\nFROM invoice_input i\n\nLEFT JOIN catalog_match cm\n    ON true;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.supplier_id,\n  $json.purchase_order_id,\n  $json.invoice_date,\n  $json.invoice_id,\n  $json.invoice_item_id,\n  $json.invoice_line_number,\n  $json.invoice_supplier_sku,\n  $json.invoice_description,\n  $json.invoice_quantity,\n  $json.invoice_unit_price,\n  $json.invoice_line_total\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -4032,
+        832
+      ],
+      "id": "cb1dfd35-dda2-4c3b-b1ad-d103e7b626b7",
+      "name": "DB - Search Unmatched Product",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = $json;\n\nlet classification;\nlet anomalyType = null;\nlet requiresReview = false;\n\n// Recover the scored candidate belonging to this exact invoice line.\nconst scoredItems = $('Code - Score Product Candidates').all();\n\nconst scored = scoredItems.find(\n  item =>\n    Number(item.json.invoice_line_number) ===\n    Number(row.invoice_line_number)\n);\n\nconst candidate = scored?.json ?? null;\n\nconst score = Number(candidate?.match_score ?? 0);\n\nif (row.catalog_product_found === true) {\n  classification = 'KNOWN_CATALOG_PRODUCT';\n} else if (score >= 25) {\n  classification = 'POSSIBLE_PRODUCT_MATCH';\n  requiresReview = true;\n} else {\n  classification = 'UNKNOWN_PRODUCT';\n  anomalyType = 'UNKNOWN_PRODUCT';\n}\n\nreturn {\n  ...row,\n\n  best_candidate_product_id:\n    candidate?.product_id ?? null,\n\n  best_candidate_sku:\n    candidate?.internal_sku ?? null,\n\n  best_candidate_name:\n    candidate?.internal_product_name ?? null,\n\n  best_candidate_po_item_id:\n    candidate?.po_item_id ?? null,\n\n  best_candidate_score:\n    score,\n\n  best_candidate_score_gap:\n    candidate?.score_gap ?? null,\n\n  best_candidate_reasons:\n    candidate?.match_reasons ?? [],\n\n  best_candidate_alias_similarity:\n    candidate?.alias_similarity ?? null,\n\n  best_candidate_product_name_similarity:\n    candidate?.product_name_similarity ?? null,\n\n  best_candidate_po_description_similarity:\n    candidate?.po_description_similarity ?? null,\n\n  classification,\n  anomaly_type: anomalyType,\n  requires_review: requiresReview\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3808,
+        832
+      ],
+      "id": "d7fbcaf0-a85a-4e13-8ec6-b97833fc8fec",
+      "name": "Code - Classify Unmatched Product"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "POSSIBLE_PRODUCT_MATCH",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "0fcfaad2-191b-4780-a0be-704d646e83c8"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "POSSIBLE_MATCH"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "17dfa283-73a5-4671-a98f-b91b6d8bf16a",
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "UNKNOWN_PRODUCT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "UNKNOWN_PRODUCT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "aa293405-1b50-4d9a-b843-c092792384fe",
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "KNOWN_CATALOG_PRODUCT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "KNOWN_PRODUCT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -3584,
+        816
+      ],
+      "id": "015ff8d4-7470-4c54-8fc7-f1b9239c2247",
+      "name": "Switch - Unmatched Classification"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.invoices (\n    organization_id,\n    supplier_id,\n    purchase_order_id,\n    invoice_number,\n    invoice_date,\n    currency,\n    subtotal,\n    tax,\n    discount,\n    additional_charges,\n    total,\n    document_hash,\n    source_message_id,\n    processing_status,\n    notes\n)\nVALUES (\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::text,\n    $5::date,\n    $6::text,\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n    $11::numeric,\n    $12::text,\n    $13::text,\n    'PROCESSING',\n    'Created automatically by ProcureGuard AI invoice intake workflow'\n)\n\nON CONFLICT (\n    organization_id,\n    supplier_id,\n    invoice_number\n)\n\nDO UPDATE SET\n    updated_at = public.invoices.updated_at\n\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    supplier_id,\n    purchase_order_id,\n    invoice_number,\n    invoice_date,\n    currency,\n    subtotal,\n    tax,\n    discount,\n    additional_charges,\n    total,\n    document_hash,\n    source_message_id,\n    processing_status,\n    created_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.supplier_id,\n  $json.purchase_order_id,\n  $('Code - Parse Invoice JSON').first().json.invoice_number,\n  $('Code - Parse Invoice JSON').first().json.invoice_date,\n  $('Code - Parse Invoice JSON').first().json.currency,\n  $('Code - Parse Invoice JSON').first().json.subtotal,\n  $('Code - Parse Invoice JSON').first().json.tax,\n  $('Code - Parse Invoice JSON').first().json.discount,\n  $('Code - Parse Invoice JSON').first().json.additional_charges,\n  $('Code - Parse Invoice JSON').first().json.total,\n  $('Prepare - Invoice Context').first().json.document_hash,\n  $('Prepare - Invoice Context').first().json.gmail_message_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5600,
+        832
+      ],
+      "id": "f8e56c22-cc1c-4299-a9c1-62b9e06a45ca",
+      "name": "DB - Create Invoice"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.invoice_items (\n    invoice_id,\n    organization_id,\n    line_number,\n    product_id,\n    purchase_order_item_id,\n    description_from_invoice,\n    supplier_sku,\n    invoiced_quantity,\n    unit_price,\n    discount,\n    tax\n)\nVALUES (\n    $1::uuid,\n    $2::uuid,\n    $3::integer,\n    NULL,\n    NULL,\n    $4::text,\n    $5::text,\n    $6::numeric,\n    $7::numeric,\n    0,\n    0\n)\n\nON CONFLICT (invoice_id, line_number)\n\nDO UPDATE SET\n    updated_at = public.invoice_items.updated_at\n\nRETURNING\n    id AS invoice_item_id,\n    invoice_id,\n    organization_id,\n    line_number AS invoice_line_number,\n    product_id,\n    purchase_order_item_id,\n    description_from_invoice AS description,\n    supplier_sku,\n    invoiced_quantity AS quantity,\n    unit_price,\n    discount,\n    tax,\n    line_total,\n    created_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   $json.invoice_line_number,   $json.description,   $json.supplier_sku,   $json.quantity,   $json.unit_price ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5152,
+        960
+      ],
+      "id": "00d9229c-1a1b-4b34-85c6-12083bc9f029",
+      "name": "DB - Create Invoice Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const persistedItems = $input.all();\n\nconst createdInvoice = $('DB - Create Invoice').first().json;\nconst supplier = $('DB - Match Supplier').first().json;\n\nreturn persistedItems.map(item => {\n  const row = item.json;\n\n  return {\n    json: {\n      invoice_item_id: row.invoice_item_id,\n      invoice_id: row.invoice_id,\n\n      invoice_line_number: Number(row.invoice_line_number),\n\n      organization_id: row.organization_id,\n      supplier_id: supplier.id,\n      purchase_order_id: createdInvoice.purchase_order_id,\n\n      invoice_number: createdInvoice.invoice_number,\n      invoice_date: createdInvoice.invoice_date,\n      currency: createdInvoice.currency,\n\n      invoice_supplier_sku: row.supplier_sku,\n      invoice_description: row.description,\n\n      invoice_quantity: Number(row.quantity),\n      invoice_unit_price: Number(row.unit_price),\n      invoice_line_total: Number(row.line_total),\n\n      product_id: row.product_id,\n      purchase_order_item_id: row.purchase_order_item_id\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4928,
+        960
+      ],
+      "id": "6afc1239-fcff-4c92-9219-d618a9e18162",
+      "name": "Code - Prepare Persisted Items"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n\n    NULL::uuid,\n\n    $5::uuid,\n\n    'UNKNOWN_PRODUCT',\n    'HIGH',\n    'OPEN',\n\n    NULL::numeric,\n    $9::numeric,\n    NULL::numeric,\n    NULL::numeric,\n\n    $12::numeric,\n\n    $11::text,\n\n    jsonb_build_object(\n        'invoice_line_number', $6::integer,\n        'supplier_sku', $7::text,\n        'invoice_description', $8::text,\n        'invoice_quantity', $9::numeric,\n        'invoice_unit_price', $10::numeric,\n        'invoice_line_total', $12::numeric,\n        'catalog_product_found', false,\n        'catalog_match_method', $13::text,\n        'best_candidate_product_id', $14::text,\n        'best_candidate_sku', $15::text,\n        'best_candidate_name', $16::text,\n        'best_candidate_score', $17::numeric,\n        'classification', $18::text,\n        'requires_review', $19::boolean\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.invoice_item_id = $3::uuid\n      AND a.anomaly_type = 'UNKNOWN_PRODUCT'\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    actual_value,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_item_id,   $json.supplier_id,   $json.purchase_order_id,    $json.invoice_line_number,   $json.invoice_supplier_sku,   $json.invoice_description,   $json.invoice_quantity,   $json.invoice_unit_price,    'Unknown product on invoice line ' + $json.invoice_line_number +   ': ' + $json.invoice_description +   ' (' + $json.invoice_supplier_sku +   ') could not be confidently matched to the supplier catalog or purchase order.',    $json.invoice_line_total,    $json.catalog_match_method,    $json.best_candidate_product_id ?? null,   $json.best_candidate_sku ?? null,   $json.best_candidate_name ?? null,   $json.best_candidate_score ?? null,   $json.classification,   $json.requires_review ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3360,
+        928
+      ],
+      "id": "9b16bab1-a6c0-475f-a14d-615d23b8a6d2",
+      "name": "DB - Create Unknown Product Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    estimated_financial_impact,\n    description,\n    evidence\n)\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n\n    'PRODUCT_MATCH_REVIEW',\n    'MEDIUM',\n    'UNDER_REVIEW',\n\n    0.00,\n\n    $7::text,\n\n    jsonb_build_object(\n        'invoice_line_number', $8::integer,\n        'invoice_supplier_sku', $9::text,\n        'invoice_description', $10::text,\n        'invoice_quantity', $11::numeric,\n        'invoice_unit_price', $12::numeric,\n        'invoice_line_total', $13::numeric,\n\n        'candidate_product_id', $5::text,\n        'candidate_internal_sku', $14::text,\n        'candidate_product_name', $15::text,\n        'candidate_po_item_id', $16::text,\n\n        'match_score', $17::numeric,\n        'score_gap', $18::numeric,\n        'match_reasons', $19::jsonb,\n\n        'alias_similarity', $20::numeric,\n        'product_name_similarity', $21::numeric,\n        'po_description_similarity', $22::numeric,\n\n        'review_reason',\n        'Possible product match requires human confirmation'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.invoice_item_id = $3::uuid\n      AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id AS candidate_product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.invoice_id,\n  $json.invoice_item_id,\n  $json.supplier_id,\n  $json.best_candidate_product_id,\n  $json.purchase_order_id,\n\n  'Possible product match for invoice line ' +\n    $json.invoice_line_number +\n    ': \"' + $json.invoice_description +\n    '\" may correspond to \"' +\n    ($json.best_candidate_name ?? 'unknown candidate') +\n    '\" and requires human confirmation.',\n\n  $json.invoice_line_number,\n  $json.invoice_supplier_sku,\n  $json.invoice_description,\n  $json.invoice_quantity,\n  $json.invoice_unit_price,\n  $json.invoice_line_total,\n\n  $json.best_candidate_sku,\n  $json.best_candidate_name,\n  $json.best_candidate_po_item_id,\n\n  $json.best_candidate_score,\n  $json.best_candidate_score_gap,\n  JSON.stringify($json.best_candidate_reasons ?? []),\n\n  $json.best_candidate_alias_similarity,\n  $json.best_candidate_product_name_similarity,\n  $json.best_candidate_po_description_similarity\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3360,
+        736
+      ],
+      "id": "b53d5940-659d-4401-a126-5020e53a1449",
+      "name": "DB - Create Product Match Review Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.approvals (\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    decision_notes\n)\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    'ANOMALY_REVIEW',\n    'PENDING',\n    'PROCUREGUARD_N8N',\n    $4::text\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.approvals ap\n    WHERE ap.organization_id = $1::uuid\n      AND ap.anomaly_id = $2::uuid\n      AND ap.approval_type = 'ANOMALY_REVIEW'\n      AND ap.status = 'PENDING'\n)\n\nRETURNING\n    id AS approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    requested_at,\n    decided_by,\n    decided_at,\n    decision_notes,\n    expires_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.anomaly_id,   $json.invoice_id,    'Review possible product match for invoice item ' +   $json.invoice_item_id +   '. Candidate product: ' +   ($json.evidence?.candidate_product_name ?? 'Unknown') +   ' (' +   ($json.evidence?.candidate_internal_sku ?? 'No SKU') +   '). Match score: ' +   ($json.evidence?.match_score ?? 0) +   '.' ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3136,
+        736
+      ],
+      "id": "c306637d-4664-4872-a603-0f6c6783b632",
+      "name": "DB - Create Product Match Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n\n    anomaly_type,\n    severity,\n    status,\n\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n\n    'PRODUCT_MATCH_REVIEW',\n    'MEDIUM',\n    'UNDER_REVIEW',\n\n    0,\n\n    $7::text,\n\n    jsonb_build_object(\n        'invoice_line_number', $8::integer,\n        'invoice_description', $9::text,\n        'invoice_supplier_sku', $10::text,\n        'invoice_quantity', $11::numeric,\n        'invoice_unit_price', $12::numeric,\n        'invoice_line_total', $13::numeric,\n\n        'candidate_product_id', $5::uuid,\n        'candidate_internal_sku', $14::text,\n        'candidate_product_name', $15::text,\n        'candidate_po_item_id', $16::uuid,\n\n        'match_score', $17::numeric,\n        'score_gap', $18::numeric,\n\n        'match_reasons',\n            COALESCE($19::jsonb, '[]'::jsonb),\n\n        'alias_similarity', $20::numeric,\n        'product_name_similarity', $21::numeric,\n        'po_description_similarity', $22::numeric,\n\n        'review_reason',\n        'Product match confidence requires human confirmation'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.invoice_item_id = $3::uuid\n      AND a.anomaly_type = 'PRODUCT_MATCH_REVIEW'\n      AND a.status IN ('OPEN', 'UNDER_REVIEW')\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id AS candidate_product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.invoice_id,\n  $json.invoice_item_id,\n  $json.supplier_id,\n  $json.product_id,\n  $json.purchase_order_id,\n\n  'Possible product match for invoice line ' +\n    $json.invoice_line_number +\n    ': \"' +\n    $json.invoice_description +\n    '\" may correspond to \"' +\n    $json.internal_product_name +\n    '\" and requires human confirmation.',\n\n  $json.invoice_line_number,\n  $json.invoice_description,\n  $json.invoice_supplier_sku,\n  $json.invoice_quantity,\n  $json.invoice_unit_price,\n  $json.invoice_line_total,\n\n  $json.internal_sku,\n  $json.internal_product_name,\n  $json.po_item_id,\n\n  $json.match_score,\n  $json.score_gap,\n\n  JSON.stringify($json.match_reasons || []),\n\n  $json.alias_similarity ?? 0,\n  $json.product_name_similarity ?? 0,\n  $json.po_description_similarity ?? 0\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -4032,
+        640
+      ],
+      "id": "d598cdfb-f6ed-41fb-9a98-019b4cceaca4",
+      "name": "DB - Create Review Match Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.approvals (\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    decision_notes\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    'ANOMALY_REVIEW',\n    'PENDING',\n    'PROCUREGUARD_N8N',\n\n    'Review possible product match. Candidate product: ' ||\n    COALESCE($4::text, 'Unknown') ||\n    ' (' ||\n    COALESCE($5::text, 'Unknown SKU') ||\n    '). Match score: ' ||\n    COALESCE($6::text, 'N/A') ||\n    '.'\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.approvals ap\n    WHERE ap.organization_id = $1::uuid\n      AND ap.anomaly_id = $2::uuid\n      AND ap.approval_type = 'ANOMALY_REVIEW'\n      AND ap.status = 'PENDING'\n)\n\nRETURNING\n    id AS approval_id,\n    organization_id,\n    anomaly_id,\n    invoice_id,\n    approval_type,\n    status,\n    requested_by,\n    requested_at,\n    decided_by,\n    decided_at,\n    decision_notes,\n    expires_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.anomaly_id,   $json.invoice_id,   $json.evidence?.candidate_product_name,   $json.evidence?.candidate_internal_sku,   $json.evidence?.match_score ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3808,
+        640
+      ],
+      "id": "8a39b464-7290-40f4-8a86-86ec57063ba5",
+      "name": "DB - Create Review Match Approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    EXISTS (\n        SELECT 1\n        FROM public.invoices existing\n        WHERE existing.organization_id = $1::uuid\n          AND existing.supplier_id = $2::uuid\n          AND LOWER(TRIM(existing.invoice_number))\n              = LOWER(TRIM($3::text))\n    ) AS duplicate_invoice,\n\n    (\n        SELECT existing.id\n        FROM public.invoices existing\n        WHERE existing.organization_id = $1::uuid\n          AND existing.supplier_id = $2::uuid\n          AND LOWER(TRIM(existing.invoice_number))\n              = LOWER(TRIM($3::text))\n        ORDER BY existing.created_at DESC\n        LIMIT 1\n    ) AS existing_invoice_id,\n\n    $1::uuid AS organization_id,\n    $2::uuid AS supplier_id,\n    $3::text AS invoice_number,\n\n    $4::uuid AS purchase_order_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.supplier_id,\n  $('Code - Parse Invoice JSON').item.json.invoice_number,\n  $json.id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6048,
+        640
+      ],
+      "id": "ef07b65d-8e8e-48c6-8da8-5bb84e54da04",
+      "name": "DB - Check Duplicate Invoice Number"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7115af9b-8a47-44dd-b0b6-65b3750b1b75",
+              "leftValue": "={{ $json.duplicate_invoice }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -5824,
+        640
+      ],
+      "id": "bdef609d-0977-47e6-8f43-609de4539f5d",
+      "name": "IF - Duplicate Invoice Number?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n\n    anomaly_type,\n    severity,\n    status,\n\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    NULL,\n    $3::uuid,\n    NULL,\n    $4::uuid,\n\n    'DUPLICATE_INVOICE',\n    'HIGH',\n    'OPEN',\n\n    0,\n\n    'Possible duplicate supplier invoice detected. Invoice number \"' ||\n    $5::text ||\n    '\" already exists for this supplier.',\n\n    jsonb_build_object(\n        'reason', 'DUPLICATE_SUPPLIER_INVOICE_NUMBER',\n        'invoice_number', $5::text,\n        'existing_invoice_id', $2::uuid,\n        'supplier_id', $3::uuid,\n        'purchase_order_id', $4::uuid,\n        'detection_method', 'SUPPLIER_AND_INVOICE_NUMBER'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.anomaly_type = 'DUPLICATE_INVOICE'\n      AND a.status IN (\n          'OPEN',\n          'UNDER_REVIEW',\n          'CONFIRMED'\n      )\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    supplier_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.existing_invoice_id,   $json.supplier_id,   $json.purchase_order_id,   $json.invoice_number ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5600,
+        640
+      ],
+      "id": "84dcb33c-b3bc-4d50-bb63-4a93ab3c321d",
+      "name": "DB - Create Duplicate Invoice Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.invoices (\n    organization_id,\n    supplier_id,\n    purchase_order_id,\n\n    invoice_number,\n    invoice_date,\n    currency,\n\n    subtotal,\n    tax,\n    discount,\n    additional_charges,\n    total,\n\n    document_hash,\n    processing_status,\n    notes\n)\n\nVALUES (\n    $1::uuid,\n    $2::uuid,\n    NULL,\n\n    $3::text,\n    $4::date,\n    $5::text,\n\n    $6::numeric,\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n\n    $11::text,\n    'PROCESSING',\n\n    'Invoice created without matching purchase order. PO supplied on invoice: ' ||\n    COALESCE($12::text, 'NONE')\n)\n\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    supplier_id,\n    purchase_order_id,\n    invoice_number,\n    invoice_date,\n    currency,\n    subtotal,\n    tax,\n    discount,\n    additional_charges,\n    total,\n    document_hash,\n    processing_status,\n    notes,\n    created_at;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Match Supplier').item.json.organization_id,   $('DB - Match Supplier').item.json.id,    $('Code - Parse Invoice JSON').item.json.invoice_number,   $('Code - Parse Invoice JSON').item.json.invoice_date,   $('Code - Parse Invoice JSON').item.json.currency,    $('Code - Parse Invoice JSON').item.json.subtotal,   $('Code - Parse Invoice JSON').item.json.tax,   $('Code - Parse Invoice JSON').item.json.discount,   $('Code - Parse Invoice JSON').item.json.additional_charges,   $('Code - Parse Invoice JSON').item.json.total,    $('Crypto - Generate PDF Hash').item.json.document_hash,   $('Code - Parse Invoice JSON').item.json.po_number ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5600,
+        1216
+      ],
+      "id": "53fd3e47-a127-40fe-a819-6e8e2b24dbfc",
+      "name": "DB - Create Invoice Without PO"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n\n    anomaly_type,\n    severity,\n    status,\n\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    NULL,\n    $3::uuid,\n    NULL,\n    NULL,\n\n    'MISSING_PO',\n    'HIGH',\n    'OPEN',\n\n    $6::numeric,\n\n    'No matching purchase order was found for invoice \"' ||\n    $4::text ||\n    '\". Supplier-provided PO reference: \"' ||\n    COALESCE($5::text, 'NONE') ||\n    '\".',\n\n    jsonb_build_object(\n        'reason', 'PURCHASE_ORDER_NOT_FOUND',\n\n        'invoice_number', $4::text,\n        'supplier_provided_po_number', $5::text,\n\n        'invoice_total', $6::numeric,\n        'currency', $7::text,\n        'invoice_date', $8::date,\n\n        'supplier_id', $3::uuid,\n\n        'detection_method',\n        'SUPPLIER_AND_PO_NUMBER_LOOKUP'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.anomaly_type = 'MISSING_PO'\n      AND a.status IN (\n          'OPEN',\n          'UNDER_REVIEW',\n          'CONFIRMED'\n      )\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    supplier_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.supplier_id,    $json.invoice_number,    $('Code - Parse Invoice JSON').item.json.po_number,    $json.total,   $json.currency,   $json.invoice_date ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5376,
+        1216
+      ],
+      "id": "0d762550-9bb6-426a-a27e-289d82464d1b",
+      "name": "DB - Create Missing PO Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    EXISTS (\n        SELECT 1\n        FROM public.invoices existing\n        WHERE existing.organization_id = $1::uuid\n          AND existing.supplier_id = $2::uuid\n          AND LOWER(TRIM(existing.invoice_number))\n              = LOWER(TRIM($3::text))\n    ) AS duplicate_invoice,\n\n    (\n        SELECT existing.id\n        FROM public.invoices existing\n        WHERE existing.organization_id = $1::uuid\n          AND existing.supplier_id = $2::uuid\n          AND LOWER(TRIM(existing.invoice_number))\n              = LOWER(TRIM($3::text))\n        ORDER BY existing.created_at DESC\n        LIMIT 1\n    ) AS existing_invoice_id,\n\n    $1::uuid AS organization_id,\n    $2::uuid AS supplier_id,\n    $3::text AS invoice_number,\n\n    $4::text AS supplied_po_number;",
+        "options": {
+          "queryReplacement": "={{ [   $('DB - Match Supplier').item.json.organization_id,   $('DB - Match Supplier').item.json.id,   $('Code - Parse Invoice JSON').item.json.invoice_number,   $('Code - Parse Invoice JSON').item.json.po_number ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -6048,
+        1216
+      ],
+      "id": "4756294d-d7ad-4963-bdde-ab7026791557",
+      "name": "DB - Check Missing-PO Invoice Duplicate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f459ff5f-aa4c-47af-a09d-4e38a5926848",
+              "leftValue": "={{ $json.duplicate_invoice }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -5824,
+        1216
+      ],
+      "id": "24df7831-9326-432c-8f5a-632074d0fcff",
+      "name": "IF - Missing-PO Invoice Duplicate?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d75d5a90-6a73-40dc-a8f3-af74c498fc45",
+              "leftValue": "={{ Number($json.additional_charges ?? 0) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -5376,
+        768
+      ],
+      "id": "4282718a-732d-4d32-a44b-54fb2e205fa7",
+      "name": "IF - Unexpected Charges?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence\n)\nSELECT\n    $1::uuid,\n    $2::uuid,\n    NULL,\n    $3::uuid,\n    NULL,\n    $4::uuid,\n    'UNEXPECTED_CHARGE',\n    CASE\n        WHEN $7::numeric >= 10000 THEN 'HIGH'\n        WHEN $7::numeric >= 5000 THEN 'MEDIUM'\n        ELSE 'LOW'\n    END,\n    'OPEN',\n    0,\n    $7::numeric,\n    $7::numeric,\n    NULL,\n    $7::numeric,\n    'Unexpected additional charges of ' ||\n        $8::text || ' ' ||\n        $7::text ||\n        ' detected on invoice \"' ||\n        $5::text || '\".',\n    jsonb_build_object(\n        'reason', 'ADDITIONAL_CHARGES_PRESENT',\n        'invoice_number', $5::text,\n        'invoice_date', $6::date,\n        'subtotal', $9::numeric,\n        'tax', $10::numeric,\n        'discount', $11::numeric,\n        'additional_charges', $7::numeric,\n        'invoice_total', $12::numeric,\n        'currency', $8::text,\n        'detection_method', 'NON_ZERO_ADDITIONAL_CHARGES'\n    )\nWHERE $7::numeric > 0\nAND NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies a\n    WHERE a.organization_id = $1::uuid\n      AND a.invoice_id = $2::uuid\n      AND a.anomaly_type = 'UNEXPECTED_CHARGE'\n      AND a.status IN ('OPEN', 'UNDER_REVIEW', 'CONFIRMED')\n)\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    supplier_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.supplier_id,   $json.purchase_order_id,   $json.invoice_number,   $json.invoice_date,   $json.additional_charges,   $json.currency,   $json.subtotal,   $json.tax,   $json.discount,   $json.total ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -5152,
+        768
+      ],
+      "id": "a35f3807-8ce6-4c0a-9a76-f6f8b2e0fea0",
+      "name": "DB - Create Unexpected Charge Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.invoice_items\nSET\n    product_id = $1::uuid,\n    purchase_order_item_id = $2::uuid,\n    updated_at = NOW()\nWHERE id = $3::uuid\n  AND organization_id = $4::uuid\n  AND invoice_id = $5::uuid\nRETURNING\n    id AS invoice_item_id,\n    invoice_id,\n    organization_id,\n    product_id,\n    purchase_order_item_id,\n    description_from_invoice,\n    invoiced_quantity,\n    unit_price,\n    line_total,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.product_id,   $json.po_item_id,   $json.invoice_item_id,   $json.organization_id,   $json.invoice_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -4032,
+        1344
+      ],
+      "id": "c5ca7ec1-9b75-45f1-8629-80cb6bb53685",
+      "name": "DB - Persist Matched Product"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const persisted = $json;\n\nconst matched =\n  $(\"Code - Score Product Candidates\").item.json;\n\n// --------------------------------------------------\n// Convert required values to numbers\n// --------------------------------------------------\n\nconst invoiceQty =\n  Number(matched.invoice_quantity || 0);\n\nconst invoiceUnitPrice =\n  Number(matched.invoice_unit_price || 0);\n\nconst poQty =\n  Number(matched.ordered_quantity || 0);\n\nconst poUnitPrice =\n  Number(\n    matched.agreed_unit_price ||\n    matched.po_unit_price ||\n    0\n  );\n\nconst tolerancePercent =\n  Number(matched.tolerance_percent || 0);\n\n// --------------------------------------------------\n// PRICE VARIANCE\n// --------------------------------------------------\n\nconst priceVarianceAmount =\n  invoiceUnitPrice - poUnitPrice;\n\nconst priceVariancePercent =\n  poUnitPrice > 0\n    ? (priceVarianceAmount / poUnitPrice) * 100\n    : 0;\n\nconst priceOutsideTolerance =\n  poUnitPrice > 0 &&\n  priceVariancePercent > tolerancePercent;\n\nconst estimatedPriceImpact =\n  priceOutsideTolerance\n    ? priceVarianceAmount * invoiceQty\n    : 0;\n\n// --------------------------------------------------\n// QUANTITY VARIANCE\n// --------------------------------------------------\n\nconst quantityVariance =\n  invoiceQty - poQty;\n\nconst quantityVariancePercent =\n  poQty > 0\n    ? (quantityVariance / poQty) * 100\n    : 0;\n\nconst quantityOutsideTolerance =\n  poQty > 0 &&\n  quantityVariancePercent > tolerancePercent;\n\n// --------------------------------------------------\n// Return normalized matched-item result\n// --------------------------------------------------\n\nreturn {\n  json: {\n    organization_id: persisted.organization_id,\n    invoice_id: persisted.invoice_id,\n    invoice_item_id: persisted.invoice_item_id,\n    product_id: persisted.product_id,\n    purchase_order_item_id:\n      persisted.purchase_order_item_id,\n\n    supplier_id: matched.supplier_id,\n    purchase_order_id:\n      matched.purchase_order_id,\n\n    invoice_description:\n      matched.invoice_description,\n\n    invoice_quantity: invoiceQty,\n    ordered_quantity: poQty,\n\n    invoice_unit_price: invoiceUnitPrice,\n    expected_unit_price: poUnitPrice,\n\n    tolerance_percent: tolerancePercent,\n\n    price_variance_amount:\n      priceVarianceAmount,\n\n    price_variance_percent:\n      priceVariancePercent,\n\n    price_outside_tolerance:\n      priceOutsideTolerance,\n\n    estimated_price_impact:\n      estimatedPriceImpact,\n\n    quantity_variance:\n      quantityVariance,\n\n    quantity_variance_percent:\n      quantityVariancePercent,\n\n    quantity_outside_tolerance:\n      quantityOutsideTolerance\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3808,
+        1344
+      ],
+      "id": "4dc0735c-4283-4424-a1b8-30bd31858764",
+      "name": "Code - Calculate Matched Item Variances"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2bd90a56-3402-459a-ab85-6531107dec17",
+              "leftValue": "={{ $json.price_outside_tolerance }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3584,
+        1200
+      ],
+      "id": "bd092cf6-3674-4e8b-8e74-858efbcf3a1e",
+      "name": "IF - Price Variance?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n    'PRICE_VARIANCE',\n\n    CASE\n        WHEN ABS($10::numeric) >= 20 THEN 'CRITICAL'\n        WHEN ABS($10::numeric) >= 10 THEN 'HIGH'\n        WHEN ABS($10::numeric) >= 5 THEN 'MEDIUM'\n        ELSE 'LOW'\n    END,\n\n    'OPEN',\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n    $11::numeric,\n    $12::text,\n\n    jsonb_build_object(\n        'invoice_description', $13::text,\n        'invoice_quantity', $14::numeric,\n        'ordered_quantity', $15::numeric,\n        'tolerance_percent', $16::numeric,\n        'source', 'MATCHED_PRODUCT_PRICE_CHECK'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies existing\n    WHERE existing.organization_id = $1::uuid\n      AND existing.invoice_id = $2::uuid\n      AND existing.invoice_item_id = $3::uuid\n      AND existing.anomaly_type = 'PRICE_VARIANCE'\n      AND existing.status IN (\n          'OPEN',\n          'UNDER_REVIEW',\n          'CONFIRMED'\n      )\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status AS anomaly_status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_item_id,   $json.supplier_id,   $json.product_id,   $json.purchase_order_id,   $json.expected_unit_price,   $json.invoice_unit_price,   $json.price_variance_amount,   $json.price_variance_percent,   $json.estimated_price_impact,   \"Invoice unit price exceeds the agreed purchase order price beyond the configured tolerance.\",   $json.invoice_description,   $json.invoice_quantity,   $json.ordered_quantity,   $json.tolerance_percent ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3360,
+        1120
+      ],
+      "id": "41c6c7a4-9960-4e83-b435-093bdbe71931",
+      "name": "DB - Create Price Variance Anomaly"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bed7fb7d-4fd1-4608-987c-085929172c29",
+              "leftValue": "={{ $json.quantity_outside_tolerance }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3584,
+        1488
+      ],
+      "id": "542e6085-47f1-4eb9-b62a-da01a032d400",
+      "name": "IF - Quantity Variance?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.anomalies (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence\n)\n\nSELECT\n    $1::uuid,\n    $2::uuid,\n    $3::uuid,\n    $4::uuid,\n    $5::uuid,\n    $6::uuid,\n    'QUANTITY_VARIANCE',\n\n    CASE\n        WHEN ABS($10::numeric) >= 20 THEN 'CRITICAL'\n        WHEN ABS($10::numeric) >= 10 THEN 'HIGH'\n        WHEN ABS($10::numeric) >= 5 THEN 'MEDIUM'\n        ELSE 'LOW'\n    END,\n\n    'OPEN',\n\n    $7::numeric,\n    $8::numeric,\n    $9::numeric,\n    $10::numeric,\n    $11::numeric,\n    $12::text,\n\n    jsonb_build_object(\n        'invoice_description', $13::text,\n        'invoice_unit_price', $14::numeric,\n        'expected_unit_price', $15::numeric,\n        'tolerance_percent', $16::numeric,\n        'source', 'MATCHED_PRODUCT_QUANTITY_CHECK'\n    )\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM public.anomalies existing\n    WHERE existing.organization_id = $1::uuid\n      AND existing.invoice_id = $2::uuid\n      AND existing.invoice_item_id = $3::uuid\n      AND existing.anomaly_type = 'QUANTITY_VARIANCE'\n      AND existing.status IN (\n          'OPEN',\n          'UNDER_REVIEW',\n          'CONFIRMED'\n      )\n)\n\nRETURNING\n    id AS anomaly_id,\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    supplier_id,\n    product_id,\n    purchase_order_id,\n    anomaly_type,\n    severity,\n    status AS anomaly_status,\n    expected_value,\n    actual_value,\n    variance_amount,\n    variance_percent,\n    estimated_financial_impact,\n    description,\n    evidence,\n    detected_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.organization_id,   $json.invoice_id,   $json.invoice_item_id,   $json.supplier_id,   $json.product_id,   $json.purchase_order_id,    $json.ordered_quantity,   $json.invoice_quantity,   $json.quantity_variance,   $json.quantity_variance_percent,    $json.quantity_variance > 0     ? $json.quantity_variance * $json.invoice_unit_price     : 0,    \"Invoice quantity exceeds the purchase order quantity beyond the configured tolerance.\",    $json.invoice_description,   $json.invoice_unit_price,   $json.expected_unit_price,   $json.tolerance_percent ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -3360,
+        1408
+      ],
+      "id": "46d788f9-9c11-4786-a3f2-28e335c61b8f",
+      "name": "DB - Create Quantity Variance Anomaly"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    i.id AS invoice_id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status AS current_processing_status,\n\n    COUNT(a.id) AS total_anomalies,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN (\n            'OPEN',\n            'UNDER_REVIEW',\n            'CONFIRMED'\n        )\n    ) AS active_anomalies,\n\n    COUNT(a.id) FILTER (\n        WHERE a.status IN (\n            'OPEN',\n            'UNDER_REVIEW',\n            'CONFIRMED'\n        )\n        AND a.severity IN (\n            'HIGH',\n            'CRITICAL'\n        )\n    ) AS high_risk_anomalies,\n\n    COALESCE(\n        SUM(a.estimated_financial_impact) FILTER (\n            WHERE a.status IN (\n                'OPEN',\n                'UNDER_REVIEW',\n                'CONFIRMED'\n            )\n        ),\n        0\n    ) AS active_financial_exposure\n\nFROM public.invoices i\n\nLEFT JOIN public.anomalies a\n    ON a.invoice_id = i.id\n   AND a.organization_id = i.organization_id\n\nWHERE i.id = $1::uuid\n  AND i.organization_id = $2::uuid\n\nGROUP BY\n    i.id,\n    i.organization_id,\n    i.invoice_number,\n    i.processing_status;",
+        "options": {
+          "queryReplacement": "={{ [\n  $(\"Code - Calculate Matched Item Variances\").item.json.invoice_id,\n  $(\"Code - Calculate Matched Item Variances\").item.json.organization_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -2912,
+        1344
+      ],
+      "id": "13f69e67-37f8-4c84-b148-647c4a70e721",
+      "name": "DB - Evaluate Invoice Anomalies"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.invoices\nSET\n    processing_status =\n        CASE\n            WHEN $3::integer > 0\n                THEN 'REVIEW_REQUIRED'\n            ELSE 'PROCESSED'\n        END,\n    updated_at = NOW()\n\nWHERE id = $1::uuid\n  AND organization_id = $2::uuid\n\nRETURNING\n    id AS invoice_id,\n    organization_id,\n    invoice_number,\n    processing_status,\n    total,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [   $json.invoice_id,   $json.organization_id,   Number($json.active_anomalies || 0) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -2688,
+        1344
+      ],
+      "id": "78b14729-b361-421f-962a-af9cf209fc03",
+      "name": "DB - Finalize Invoice Status"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -3136,
+        1344
+      ],
+      "id": "9164c5e0-0bb9-4d1a-bc83-841e4898cee0",
+      "name": "Merge - Matched Variance Checks Complete"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail - New Supplier Invoice": {
+      "main": [
+        [
+          {
+            "node": "IF - Valid PDF Attachment",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge - Restore Invoice PDF",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "IF - Valid PDF Attachment": {
+      "main": [
+        [
+          {
+            "node": "Crypto - Generate PDF Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crypto - Generate PDF Hash": {
+      "main": [
+        [
+          {
+            "node": "DB - Check Document Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Check Document Hash": {
+      "main": [
+        [
+          {
+            "node": "IF - Duplicate Document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Duplicate Document?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Prepare - Invoice Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare - Invoice Context": {
+      "main": [
+        [
+          {
+            "node": "Merge - Restore Invoice PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge - Restore Invoice PDF": {
+      "main": [
+        [
+          {
+            "node": "PDF - Extract Invoice Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF - Extract Invoice Text": {
+      "main": [
+        [
+          {
+            "node": "AI - Extract Invoice Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Extract Invoice Data": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse Invoice JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse Invoice JSON": {
+      "main": [
+        [
+          {
+            "node": "DB - Match Supplier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Match Supplier": {
+      "main": [
+        [
+          {
+            "node": "IF - Supplier Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Supplier Found?": {
+      "main": [
+        [
+          {
+            "node": "DB - Match Purchase Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Match Purchase Order": {
+      "main": [
+        [
+          {
+            "node": "IF - Purchase Order Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Purchase Order Found?": {
+      "main": [
+        [
+          {
+            "node": "DB - Get PO Products",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Get Supplier Product Mappings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Get Product Aliases",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Check Duplicate Invoice Number",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Check Missing-PO Invoice Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Split Invoice Items": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Invoice Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Find Product Candidates": {
+      "main": [
+        [
+          {
+            "node": "Code - Score Product Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Score Product Candidates": {
+      "main": [
+        [
+          {
+            "node": "Switch - Product Match Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Product Match Status": {
+      "main": [
+        [
+          {
+            "node": "DB - Persist Matched Product",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Create Review Match Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Search Unmatched Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Search Unmatched Product": {
+      "main": [
+        [
+          {
+            "node": "Code - Classify Unmatched Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Classify Unmatched Product": {
+      "main": [
+        [
+          {
+            "node": "Switch - Unmatched Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Invoice": {
+      "main": [
+        [
+          {
+            "node": "Code - Split Invoice Items",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF - Unexpected Charges?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Invoice Items": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepare Persisted Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare Persisted Items": {
+      "main": [
+        [
+          {
+            "node": "DB - Find Product Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Unmatched Classification": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Product Match Review Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Create Unknown Product Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Product Match Review Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Product Match Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Review Match Anomaly": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Review Match Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Check Duplicate Invoice Number": {
+      "main": [
+        [
+          {
+            "node": "IF - Duplicate Invoice Number?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Duplicate Invoice Number?": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Duplicate Invoice Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Create Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Invoice Without PO": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Missing PO Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Check Missing-PO Invoice Duplicate": {
+      "main": [
+        [
+          {
+            "node": "IF - Missing-PO Invoice Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Missing-PO Invoice Duplicate?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "DB - Create Invoice Without PO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Unexpected Charges?": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Unexpected Charge Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Persist Matched Product": {
+      "main": [
+        [
+          {
+            "node": "Code - Calculate Matched Item Variances",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Calculate Matched Item Variances": {
+      "main": [
+        [
+          {
+            "node": "IF - Price Variance?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF - Quantity Variance?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Price Variance?": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Price Variance Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge - Matched Variance Checks Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Quantity Variance?": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Quantity Variance Anomaly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge - Matched Variance Checks Complete",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "DB - Create Price Variance Anomaly": {
+      "main": [
+        [
+          {
+            "node": "Merge - Matched Variance Checks Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Evaluate Invoice Anomalies": {
+      "main": [
+        [
+          {
+            "node": "DB - Finalize Invoice Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Quantity Variance Anomaly": {
+      "main": [
+        [
+          {
+            "node": "Merge - Matched Variance Checks Complete",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Matched Variance Checks Complete": {
+      "main": [
+        [
+          {
+            "node": "DB - Evaluate Invoice Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

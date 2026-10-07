@@ -1,0 +1,576 @@
+{
+  "name": "ProcureGuard AI - Daily Procurement Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -544,
+        224
+      ],
+      "id": "11a2202b-6275-423b-909b-148d5adea573",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH config AS (\n    SELECT\n        '{{ $json.organization_id }}'::uuid\n            AS organization_id,\n\n        '{{ $json.timezone }}'::text\n            AS report_timezone\n),\n\nlocal_dates AS (\n    SELECT\n        organization_id,\n        report_timezone,\n\n        (CURRENT_TIMESTAMP AT TIME ZONE report_timezone)::date\n            AS local_today\n\n    FROM config\n),\n\nparams AS (\n    SELECT\n        organization_id,\n        report_timezone,\n\n        local_today - 1\n            AS report_date,\n\n        ((local_today - 1)::timestamp\n            AT TIME ZONE report_timezone)\n            AS period_start,\n\n        (local_today::timestamp\n            AT TIME ZONE report_timezone)\n            AS period_end\n\n    FROM local_dates\n)\n\nSELECT\n    prm.organization_id,\n    prm.report_date,\n    prm.period_start,\n    prm.period_end,\n    prm.report_timezone,\n\n    (\n        SELECT COUNT(*)\n        FROM public.invoices i\n        WHERE i.organization_id = prm.organization_id\n          AND i.created_at >= prm.period_start\n          AND i.created_at < prm.period_end\n    ) AS invoices_received,\n\n    (\n        SELECT COUNT(*)\n        FROM public.invoices i\n        WHERE i.organization_id = prm.organization_id\n          AND i.processing_status = 'PROCESSED'\n          AND i.updated_at >= prm.period_start\n          AND i.updated_at < prm.period_end\n    ) AS invoices_processed,\n\n    (\n        SELECT COUNT(*)\n        FROM public.invoices i\n        WHERE i.organization_id = prm.organization_id\n          AND i.processing_status = 'REVIEW_REQUIRED'\n          AND i.updated_at >= prm.period_start\n          AND i.updated_at < prm.period_end\n    ) AS invoices_review_required,\n\n    (\n        SELECT COUNT(*)\n        FROM public.invoices i\n        WHERE i.organization_id = prm.organization_id\n          AND i.processing_status = 'FAILED'\n          AND i.updated_at >= prm.period_start\n          AND i.updated_at < prm.period_end\n    ) AS invoices_failed,\n\n    (\n        SELECT COUNT(*)\n        FROM public.anomalies a\n        WHERE a.organization_id = prm.organization_id\n          AND a.detected_at >= prm.period_start\n          AND a.detected_at < prm.period_end\n    ) AS anomalies_detected,\n\n    (\n        SELECT COUNT(*)\n        FROM public.anomalies a\n        WHERE a.organization_id = prm.organization_id\n          AND a.severity IN ('HIGH', 'CRITICAL')\n          AND a.detected_at >= prm.period_start\n          AND a.detected_at < prm.period_end\n    ) AS high_risk_anomalies,\n\n    (\n        SELECT COALESCE(\n            SUM(a.estimated_financial_impact),\n            0\n        )\n        FROM public.anomalies a\n        WHERE a.organization_id = prm.organization_id\n          AND a.detected_at >= prm.period_start\n          AND a.detected_at < prm.period_end\n    ) AS estimated_financial_impact,\n\n    (\n        SELECT COUNT(*)\n        FROM public.approvals ap\n        WHERE ap.organization_id = prm.organization_id\n          AND ap.status = 'PENDING'\n    ) AS pending_approvals,\n\n    (\n        SELECT COUNT(*)\n        FROM public.processing_errors pe\n        WHERE pe.organization_id = prm.organization_id\n          AND pe.status IN ('OPEN', 'RETRYING')\n    ) AS open_processing_errors\n\nFROM params prm;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        128,
+        -64
+      ],
+      "id": "36e3bbe4-44a0-4eec-80a7-360ecc079666",
+      "name": "DB - Get Daily Procurement Metrics"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    '{{ $json.organization_id }}'::uuid\n        AS organization_id,\n\n    '{{ $json.report_date }}'::date\n        AS report_date,\n\n    '{{ $json.period_start }}'::timestamptz\n        AS period_start,\n\n    '{{ $json.period_end }}'::timestamptz\n        AS period_end,\n\n    '{{ $json.report_timezone }}'::text\n        AS report_timezone,\n      {{ Number($json.invoices_received || 0) }}\n        AS invoices_received,\n\n    {{ Number($json.invoices_processed || 0) }}\n        AS invoices_processed,\n\n    {{ Number($json.invoices_review_required || 0) }}\n        AS invoices_review_required,\n\n    {{ Number($json.invoices_failed || 0) }}\n        AS invoices_failed,\n\n    {{ Number($json.anomalies_detected || 0) }}\n        AS anomalies_detected,\n\n    {{ Number($json.high_risk_anomalies || 0) }}\n        AS high_risk_anomalies,\n\n    {{ Number($json.estimated_financial_impact || 0) }}\n        AS estimated_financial_impact,\n\n    {{ Number($json.pending_approvals || 0) }}\n        AS pending_approvals_count,\n\n    {{ Number($json.open_processing_errors || 0) }}\n        AS open_processing_errors,\n\n    COALESCE(\n        jsonb_agg(\n            jsonb_build_object(\n                'anomaly_id', a.id,\n                'anomaly_type', a.anomaly_type,\n                'severity', a.severity,\n                'status', a.status,\n                'description', a.description,\n                'expected_value', a.expected_value,\n                'actual_value', a.actual_value,\n                'variance_amount', a.variance_amount,\n                'variance_percent', a.variance_percent,\n                'estimated_financial_impact',\n                    a.estimated_financial_impact,\n                'detected_at', a.detected_at,\n                'invoice_id', i.id,\n                'invoice_number', i.invoice_number,\n                'supplier_id', s.id,\n                'supplier_code', s.supplier_code,\n                'supplier_name', s.supplier_name,\n                'product_id', p.id,\n                'product_name', p.product_name\n            )\n\n            ORDER BY\n                CASE a.severity\n                    WHEN 'CRITICAL' THEN 1\n                    WHEN 'HIGH' THEN 2\n                    WHEN 'MEDIUM' THEN 3\n                    WHEN 'LOW' THEN 4\n                    ELSE 5\n                END,\n\n                a.estimated_financial_impact DESC,\n                a.detected_at DESC\n        ) FILTER (\n            WHERE a.id IS NOT NULL\n        ),\n\n        '[]'::jsonb\n\n    ) AS anomalies\n\nFROM (\n    SELECT\n        '{{ $json.organization_id }}'::uuid\n            AS organization_id\n) ctx\n\nLEFT JOIN public.anomalies a\n    ON a.organization_id = ctx.organization_id\n\n   AND a.detected_at >=\n       '{{ $json.period_start }}'::timestamptz\n\n   AND a.detected_at <\n       '{{ $json.period_end }}'::timestamptz\n\nLEFT JOIN public.invoices i\n    ON i.id = a.invoice_id\n   AND i.organization_id = a.organization_id\n\nLEFT JOIN public.suppliers s\n    ON s.id = a.supplier_id\n   AND s.organization_id = a.organization_id\n\nLEFT JOIN public.products p\n    ON p.id = a.product_id\n   AND p.organization_id = a.organization_id;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        352,
+        -64
+      ],
+      "id": "bbcee17c-225a-48c1-ab74-488d353c1f61",
+      "name": "DB - Get Daily Anomalies",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    $1::uuid AS organization_id,\n    $2::date AS report_date,\n    $3::timestamptz AS period_start,\n    $4::timestamptz AS period_end,\n    $5::text AS report_timezone,\n\n    $6::bigint AS invoices_received,\n    $7::bigint AS invoices_processed,\n    $8::bigint AS invoices_review_required,\n    $9::bigint AS invoices_failed,\n    $10::bigint AS anomalies_detected,\n    $11::bigint AS high_risk_anomalies,\n    $12::numeric AS estimated_financial_impact,\n    $13::bigint AS pending_approvals_count,\n    $14::bigint AS open_processing_errors,\n\n    $15::jsonb AS anomalies,\n\n    COALESCE(\n        jsonb_agg(\n            jsonb_build_object(\n                'approval_id', ap.id,\n                'approval_type', ap.approval_type,\n                'approval_status', ap.status,\n                'requested_at', ap.requested_at,\n                'expires_at', ap.expires_at,\n                'requested_by', ap.requested_by,\n\n                'anomaly_id', a.id,\n                'anomaly_type', a.anomaly_type,\n                'severity', a.severity,\n                'anomaly_status', a.status,\n                'anomaly_description', a.description,\n                'estimated_financial_impact',\n                    a.estimated_financial_impact,\n\n                'invoice_id', i.id,\n                'invoice_number', i.invoice_number,\n\n                'supplier_id', s.id,\n                'supplier_code', s.supplier_code,\n                'supplier_name', s.supplier_name\n            )\n\n            ORDER BY\n                CASE a.severity\n                    WHEN 'CRITICAL' THEN 1\n                    WHEN 'HIGH' THEN 2\n                    WHEN 'MEDIUM' THEN 3\n                    WHEN 'LOW' THEN 4\n                    ELSE 5\n                END,\n\n                a.estimated_financial_impact DESC,\n                ap.requested_at ASC\n        )\n        FILTER (WHERE ap.id IS NOT NULL),\n\n        '[]'::jsonb\n    ) AS pending_approvals\n\nFROM (\n    SELECT $1::uuid AS organization_id\n) ctx\n\nLEFT JOIN public.approvals ap\n    ON ap.organization_id = ctx.organization_id\n   AND ap.status = 'PENDING'\n\nLEFT JOIN public.anomalies a\n    ON a.id = ap.anomaly_id\n   AND a.organization_id = ap.organization_id\n\nLEFT JOIN public.invoices i\n    ON i.id = ap.invoice_id\n   AND i.organization_id = ap.organization_id\n\nLEFT JOIN public.suppliers s\n    ON s.id = a.supplier_id\n   AND s.organization_id = ap.organization_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.report_date,\n  $json.period_start,\n  $json.period_end,\n  $json.report_timezone,\n\n  Number($json.invoices_received || 0),\n  Number($json.invoices_processed || 0),\n  Number($json.invoices_review_required || 0),\n  Number($json.invoices_failed || 0),\n  Number($json.anomalies_detected || 0),\n  Number($json.high_risk_anomalies || 0),\n  Number($json.estimated_financial_impact || 0),\n  Number($json.pending_approvals_count || 0),\n  Number($json.open_processing_errors || 0),\n\n  JSON.stringify($json.anomalies || [])\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        576,
+        -64
+      ],
+      "id": "4d376e31-956b-43ae-9661-76a99955c7b1",
+      "name": "DB - Get Pending Approvals",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    $1::uuid AS organization_id,\n    $2::date AS report_date,\n    $3::timestamptz AS period_start,\n    $4::timestamptz AS period_end,\n    $5::text AS report_timezone,\n\n    $6::bigint AS invoices_received,\n    $7::bigint AS invoices_processed,\n    $8::bigint AS invoices_review_required,\n    $9::bigint AS invoices_failed,\n    $10::bigint AS anomalies_detected,\n    $11::bigint AS high_risk_anomalies,\n    $12::numeric AS estimated_financial_impact,\n    $13::bigint AS pending_approvals_count,\n    $14::bigint AS open_processing_errors,\n\n    $15::jsonb AS anomalies,\n    $16::jsonb AS pending_approvals,\n\n    COALESCE(\n        jsonb_agg(\n            jsonb_build_object(\n                'processing_error_id', pe.id,\n                'error_stage', pe.error_stage,\n                'error_code', pe.error_code,\n                'error_message', pe.error_message,\n                'technical_details', pe.technical_details,\n                'severity', pe.severity,\n                'status', pe.status,\n                'retry_count', pe.retry_count,\n                'workflow_name', pe.workflow_name,\n                'workflow_execution_id', pe.workflow_execution_id,\n                'source_message_id', pe.source_message_id,\n                'invoice_id', pe.invoice_id,\n                'invoice_number', i.invoice_number,\n                'invoice_item_id', pe.invoice_item_id,\n                'context', pe.context,\n                'occurred_at', pe.occurred_at,\n                'resolved_at', pe.resolved_at,\n                'resolution_notes', pe.resolution_notes\n            )\n\n            ORDER BY\n                CASE pe.severity\n                    WHEN 'CRITICAL' THEN 1\n                    WHEN 'ERROR' THEN 2\n                    WHEN 'WARNING' THEN 3\n                    ELSE 4\n                END,\n                pe.occurred_at DESC\n        )\n        FILTER (WHERE pe.id IS NOT NULL),\n\n        '[]'::jsonb\n    ) AS processing_errors\n\nFROM (\n    SELECT $1::uuid AS organization_id\n) ctx\n\nLEFT JOIN public.processing_errors pe\n    ON pe.organization_id = ctx.organization_id\n\n   AND (\n        (\n            pe.occurred_at >= $3::timestamptz\n            AND pe.occurred_at < $4::timestamptz\n        )\n\n        OR pe.status IN ('OPEN', 'RETRYING')\n   )\n\nLEFT JOIN public.invoices i\n    ON i.id = pe.invoice_id\n   AND i.organization_id = pe.organization_id;",
+        "options": {
+          "queryReplacement": "={{ [  $json.organization_id,  $json.report_date,  $json.period_start,  $json.period_end,  $json.report_timezone,  Number($json.invoices_received || 0),  Number($json.invoices_processed || 0),  Number($json.invoices_review_required || 0),  Number($json.invoices_failed || 0),  Number($json.anomalies_detected || 0),  Number($json.high_risk_anomalies || 0),  Number($json.estimated_financial_impact || 0),  Number($json.pending_approvals_count || 0),  Number($json.open_processing_errors || 0),  JSON.stringify($json.anomalies || []),  JSON.stringify($json.pending_approvals || [])] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        800,
+        -64
+      ],
+      "id": "4d55533d-1d6a-4e14-a2f1-e347a1e40b13",
+      "name": "DB - Get Processing Errors",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ProcureGuard AI - Build Procurement Report Data\n// Multi-Organization Safe Version\n// ============================================================\n\n\n// ------------------------------------------------------------\n// 1. Get current organization data from direct input\n// ------------------------------------------------------------\n\nconst input = $input.first().json;\n\n\n// ------------------------------------------------------------\n// 2. Current organization context\n// ------------------------------------------------------------\n\nconst organizationId = input.organization_id;\nconst reportDate = input.report_date;\nconst periodStart = input.period_start;\nconst periodEnd = input.period_end;\nconst reportTimezone = input.report_timezone;\n\n\n// ------------------------------------------------------------\n// 3. Validate required organization/report context\n// ------------------------------------------------------------\n\nif (!organizationId) {\n  throw new Error(\n    \"Daily report build blocked: organization_id is missing.\"\n  );\n}\n\nif (!reportDate) {\n  throw new Error(\n    \"Daily report build blocked: report_date is missing.\"\n  );\n}\n\nif (!periodStart) {\n  throw new Error(\n    \"Daily report build blocked: period_start is missing.\"\n  );\n}\n\nif (!periodEnd) {\n  throw new Error(\n    \"Daily report build blocked: period_end is missing.\"\n  );\n}\n\nif (!reportTimezone) {\n  throw new Error(\n    \"Daily report build blocked: report_timezone is missing.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 4. Get arrays belonging to CURRENT organization\n// ------------------------------------------------------------\n\nconst anomalies = Array.isArray(input.anomalies)\n  ? input.anomalies\n  : [];\n\nconst pendingApprovals =\n  Array.isArray(input.pending_approvals)\n    ? input.pending_approvals\n    : [];\n\nconst processingErrors =\n  Array.isArray(input.processing_errors)\n    ? input.processing_errors\n    : [];\n\n\n// ------------------------------------------------------------\n// 5. Safe PostgreSQL numeric conversion\n// ------------------------------------------------------------\n\nconst numberValue = (value) => {\n  const number = Number(value);\n\n  return Number.isFinite(number)\n    ? number\n    : 0;\n};\n\n\n// ------------------------------------------------------------\n// 6. Build metrics ONLY from current input\n// No backward .item reference is used.\n// ------------------------------------------------------------\n\nconst metrics = {\n  invoices_received:\n    numberValue(input.invoices_received),\n\n  invoices_processed:\n    numberValue(input.invoices_processed),\n\n  invoices_review_required:\n    numberValue(input.invoices_review_required),\n\n  invoices_failed:\n    numberValue(input.invoices_failed),\n\n  anomalies_detected:\n    numberValue(input.anomalies_detected),\n\n  high_risk_anomalies:\n    numberValue(input.high_risk_anomalies),\n\n  estimated_financial_impact:\n    numberValue(input.estimated_financial_impact),\n\n  pending_approvals:\n    numberValue(input.pending_approvals_count),\n\n  open_processing_errors:\n    numberValue(input.open_processing_errors),\n};\n\n\n// ------------------------------------------------------------\n// 7. Sort anomalies defensively\n// CRITICAL -> HIGH -> MEDIUM -> LOW\n// Then highest estimated impact first\n// ------------------------------------------------------------\n\nconst severityRank = {\n  CRITICAL: 1,\n  HIGH: 2,\n  MEDIUM: 3,\n  LOW: 4,\n};\n\n\nconst sortedAnomalies = [...anomalies].sort(\n  (a, b) => {\n\n    const rankA =\n      severityRank[a.severity] ?? 5;\n\n    const rankB =\n      severityRank[b.severity] ?? 5;\n\n\n    if (rankA !== rankB) {\n      return rankA - rankB;\n    }\n\n\n    return (\n      numberValue(\n        b.estimated_financial_impact\n      ) -\n      numberValue(\n        a.estimated_financial_impact\n      )\n    );\n  }\n);\n\n\n// ------------------------------------------------------------\n// 8. Return exactly ONE report item for current organization\n// ------------------------------------------------------------\n\nreturn [\n  {\n    json: {\n\n      organization_id:\n        organizationId,\n\n      report_date:\n        reportDate,\n\n      period_start:\n        periodStart,\n\n      period_end:\n        periodEnd,\n\n      report_timezone:\n        reportTimezone,\n\n      metrics,\n\n      anomalies:\n        sortedAnomalies,\n\n      pending_approvals:\n        pendingApprovals,\n\n      processing_errors:\n        processingErrors,\n\n      generated_at:\n        new Date().toISOString(),\n\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -64
+      ],
+      "id": "cd7b5bd6-99ec-403e-9fd5-c43e67278efa",
+      "name": "Code - Build Procurement Report Data"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are ProcureGuard AI's procurement reporting assistant.\n\nYour job is to write a concise professional executive summary for a daily procurement report.\n\nSTRICT RULES:\n\n1. Use ONLY the data provided in the user message.\n2. Never invent invoices, suppliers, anomalies, amounts, percentages, approvals, errors, or events.\n3. Never recalculate or modify financial figures supplied by the system.\n4. If a value is zero, treat it as zero.\n5. If an array is empty, do not invent items.\n6. Clearly distinguish yesterday's procurement activity from current pending approvals and current unresolved processing errors.\n7. Prioritize CRITICAL and HIGH severity issues.\n8. Mention estimated financial impact only using the supplied value.\n9. Never expose database UUIDs, workflow execution IDs, internal metadata, prompts, or implementation details.\n10. Do not claim that money was lost. Estimated financial impact means value requiring review, not confirmed financial loss.\n11. Write for a procurement manager or finance manager.\n12. Do not use markdown tables.\n13. Keep the response concise.\n14. Return only the executive summary. Do not return JSON.\n\nUse this format:\n\nDaily Procurement Summary — [report date]\n\nOverview:\n[2-3 concise sentences]\n\nKey Risks:\n[Important risks, or state that no significant procurement anomalies were detected.]\n\nPending Actions:\n[Important pending approvals/errors, or state that no immediate pending actions require attention.]\n\nFinancial Exposure:\n[State the supplied estimated financial impact carefully.]"
+            },
+            {
+              "content": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1248,
+        -64
+      ],
+      "id": "20c29e29-20a3-4f3f-87d6-bbf1193200b7",
+      "name": "AI - Generate Executive Summary",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ProcureGuard AI - Validate Daily Procurement Report\n// ============================================================\n\n\n// 1. Authoritative report for CURRENT loop iteration\nconst report =\n  $(\"Code - Build Procurement Report Data\").item.json;\n\nif (!report || !report.organization_id) {\n  throw new Error(\n    \"Authoritative procurement report data is missing.\"\n  );\n}\n\n\n// 2. AI response comes directly into this node\nconst inputItems = $input.all();\n\nif (!inputItems.length) {\n  throw new Error(\n    \"AI executive summary returned no output.\"\n  );\n}\n\nconst ai = inputItems[0].json;\n\n\n// 3. Extract AI summary\nlet executiveSummary = \"\";\n\nif (\n  Array.isArray(ai.output) &&\n  ai.output.length > 0 &&\n  Array.isArray(ai.output[0]?.content)\n) {\n  const textPart =\n    ai.output[0].content.find(\n      part =>\n        typeof part?.text === \"string\" &&\n        part.text.trim().length > 0\n    );\n\n  if (textPart) {\n    executiveSummary = textPart.text;\n  }\n}\n\n\n// Fallback response formats\nif (\n  !executiveSummary &&\n  typeof ai.output_text === \"string\"\n) {\n  executiveSummary = ai.output_text;\n}\n\nif (\n  !executiveSummary &&\n  typeof ai.text === \"string\"\n) {\n  executiveSummary = ai.text;\n}\n\nif (\n  !executiveSummary &&\n  typeof ai.content === \"string\"\n) {\n  executiveSummary = ai.content;\n}\n\nif (\n  !executiveSummary &&\n  typeof ai.message === \"string\"\n) {\n  executiveSummary = ai.message;\n}\n\n\nexecutiveSummary =\n  String(executiveSummary || \"\").trim();\n\n\n// 4. Validate summary\nif (!executiveSummary) {\n  throw new Error(\n    \"AI executive summary text could not be extracted. Daily report blocked.\"\n  );\n}\n\nif (executiveSummary.length < 50) {\n  throw new Error(\n    \"AI executive summary is unexpectedly short. Daily report blocked.\"\n  );\n}\n\n\n// 5. Prevent obvious internal-data leakage\nconst forbiddenPatterns = [\n  /\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b/i,\n  /workflow_execution_id/i,\n  /database uuid/i,\n  /system prompt/i,\n];\n\nfor (const pattern of forbiddenPatterns) {\n  if (pattern.test(executiveSummary)) {\n    throw new Error(\n      \"Executive summary contains internal implementation data. Email blocked.\"\n    );\n  }\n}\n\n\n// 6. Validate authoritative report fields\nif (!report.report_date) {\n  throw new Error(\n    \"Report date is missing.\"\n  );\n}\n\nif (!report.report_timezone) {\n  throw new Error(\n    \"Report timezone is missing.\"\n  );\n}\n\n\n// 7. Create subject\nconst emailSubject =\n  `ProcureGuard Daily Procurement Report - ${report.report_date}`;\n\n\n// 8. Return validated current-organization report\nreturn [\n  {\n    json: {\n      report_validation_status: \"VALID\",\n\n      organization_id:\n        report.organization_id,\n\n      report_date:\n        report.report_date,\n\n      reporting_period: {\n        start:\n          report.period_start,\n\n        end:\n          report.period_end,\n\n        timezone:\n          report.report_timezone,\n      },\n\n      email_subject:\n        emailSubject,\n\n      executive_summary:\n        executiveSummary,\n\n      metrics:\n        report.metrics,\n\n      anomalies:\n        report.anomalies,\n\n      pending_approvals:\n        report.pending_approvals,\n\n      processing_errors:\n        report.processing_errors,\n\n      generated_at:\n        report.generated_at,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -64
+      ],
+      "id": "87b221f3-ad80-4e50-a374-353163a8c4f0",
+      "name": "Code - Validate Daily Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ProcureGuard AI - Build Daily Procurement Report Email\n// Multi-Organization Safe Version\n// ============================================================\n\n\n// ------------------------------------------------------------\n// 1. Get validated report for current organization\n// ------------------------------------------------------------\n\nconst items = $input.all();\n\nif (items.length !== 1) {\n  throw new Error(\n    `Daily report email build expected exactly 1 organization, but received ${items.length} items.`\n  );\n}\n\nconst data = items[0].json;\n\nif (!data.organization_id) {\n  throw new Error(\n    \"Validated report organization_id is missing.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 2. Find configuration belonging to THIS organization\n// ------------------------------------------------------------\n\nconst configItems =\n  $(\"DB - Get Report Configuration\").all();\n\nif (!configItems.length) {\n  throw new Error(\n    \"Organization report configuration is missing.\"\n  );\n}\n\n\nconst matchingConfigItem =\n  configItems.find(item =>\n    String(item.json.organization_id) ===\n    String(data.organization_id)\n  );\n\n\nif (!matchingConfigItem) {\n  throw new Error(\n    `No report configuration was found for organization ${data.organization_id}.`\n  );\n}\n\n\nconst reportConfig =\n  matchingConfigItem.json;\n\n\n// ------------------------------------------------------------\n// 3. Validate organization relationship\n// ------------------------------------------------------------\n\nif (\n  String(data.organization_id) !==\n  String(reportConfig.organization_id)\n) {\n  throw new Error(\n    \"Report organization does not match report configuration organization.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 4. Validate report configuration\n// ------------------------------------------------------------\n\nif (\n  reportConfig.daily_report_enabled !== true\n) {\n  throw new Error(\n    \"Daily procurement reporting is disabled for this organization.\"\n  );\n}\n\n\nconst reportRecipient =\n  String(\n    reportConfig.daily_report_recipient || \"\"\n  ).trim();\n\n\nif (!reportRecipient) {\n  throw new Error(\n    \"Daily report recipient is not configured.\"\n  );\n}\n\n\n// Basic email-format protection\nconst emailPattern =\n  /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\n\nif (!emailPattern.test(reportRecipient)) {\n  throw new Error(\n    \"Daily report recipient email address is invalid.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 5. Validate report\n// ------------------------------------------------------------\n\nif (\n  data.report_validation_status !== \"VALID\"\n) {\n  throw new Error(\n    \"Daily report has not passed validation. Email generation blocked.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 6. Normalize report data\n// ------------------------------------------------------------\n\nconst metrics =\n  data.metrics || {};\n\nconst counts =\n  data.summary_counts || {};\n\nconst anomalies =\n  Array.isArray(data.anomalies)\n    ? data.anomalies\n    : [];\n\nconst approvals =\n  Array.isArray(data.pending_approvals)\n    ? data.pending_approvals\n    : [];\n\nconst errors =\n  Array.isArray(data.processing_errors)\n    ? data.processing_errors\n    : [];\n\n\n// ------------------------------------------------------------\n// 7. Helper functions\n// ------------------------------------------------------------\n\nfunction safe(value, fallback = \"N/A\") {\n\n  if (\n    value === null ||\n    value === undefined ||\n    value === \"\"\n  ) {\n    return fallback;\n  }\n\n  return String(value);\n}\n\n\nfunction number(value) {\n\n  const parsed =\n    Number(value);\n\n  return Number.isFinite(parsed)\n    ? parsed\n    : 0;\n}\n\n\nfunction money(value) {\n\n  return number(value).toLocaleString(\n    \"en-PK\",\n    {\n      minimumFractionDigits: 2,\n      maximumFractionDigits: 2,\n    }\n  );\n}\n\n\n// ------------------------------------------------------------\n// 8. Important anomalies\n// Maximum 5\n// ------------------------------------------------------------\n\nconst importantAnomalies =\n  anomalies\n    .filter(a =>\n      [\"CRITICAL\", \"HIGH\"].includes(\n        a.severity\n      )\n    )\n    .slice(0, 5);\n\n\nlet anomalySection;\n\n\nif (importantAnomalies.length === 0) {\n\n  anomalySection =\n    \"No CRITICAL or HIGH severity anomalies were detected during the reporting period.\";\n\n} else {\n\n  anomalySection =\n    importantAnomalies\n      .map((a, index) => {\n\n        return (\n          `${index + 1}. ` +\n          `[${safe(a.severity)}] ` +\n          `${safe(a.anomaly_type)} | ` +\n          `Supplier: ${safe(a.supplier_name)} | ` +\n          `Invoice: ${safe(a.invoice_number)} | ` +\n          `Estimated impact: ${money(\n            a.estimated_financial_impact\n          )}`\n        );\n\n      })\n      .join(\"\\n\");\n}\n\n\n// ------------------------------------------------------------\n// 9. Pending approvals\n// Maximum 5\n// ------------------------------------------------------------\n\nconst importantApprovals =\n  approvals.slice(0, 5);\n\n\nlet approvalSection;\n\n\nif (importantApprovals.length === 0) {\n\n  approvalSection =\n    \"No pending procurement approvals require attention.\";\n\n} else {\n\n  approvalSection =\n    importantApprovals\n      .map((a, index) => {\n\n        return (\n          `${index + 1}. ` +\n          `${safe(a.approval_type)} | ` +\n          `${safe(a.severity)} | ` +\n          `Supplier: ${safe(a.supplier_name)} | ` +\n          `Invoice: ${safe(a.invoice_number)}`\n        );\n\n      })\n      .join(\"\\n\");\n}\n\n\n// ------------------------------------------------------------\n// 10. Open / retrying processing errors\n// Maximum 5\n// ------------------------------------------------------------\n\nconst unresolvedErrors =\n  errors\n    .filter(e =>\n      [\"OPEN\", \"RETRYING\"].includes(\n        e.status\n      )\n    )\n    .slice(0, 5);\n\n\nlet errorSection;\n\n\nif (unresolvedErrors.length === 0) {\n\n  errorSection =\n    \"No unresolved processing errors require attention.\";\n\n} else {\n\n  errorSection =\n    unresolvedErrors\n      .map((e, index) => {\n\n        return (\n          `${index + 1}. ` +\n          `[${safe(e.severity)}] ` +\n          `${safe(e.error_stage)} | ` +\n          `${safe(e.error_code)} | ` +\n          `Invoice: ${safe(e.invoice_number)}`\n        );\n\n      })\n      .join(\"\\n\");\n}\n\n\n// ------------------------------------------------------------\n// 11. Build deterministic email\n// ------------------------------------------------------------\n\nconst emailBody = `\nPROCUREGUARD AI\nDAILY PROCUREMENT REPORT\n\nOrganization:\n${safe(reportConfig.organization_name)}\n\nReport Date:\n${safe(data.report_date)}\n\nReporting Timezone:\n${safe(reportConfig.timezone)}\n\n==================================================\nEXECUTIVE SUMMARY\n==================================================\n\n${safe(data.executive_summary)}\n\n==================================================\nDAILY PROCUREMENT METRICS\n==================================================\n\nInvoices Received: ${number(\n  metrics.invoices_received\n)}\n\nInvoices Processed: ${number(\n  metrics.invoices_processed\n)}\n\nInvoices Requiring Review: ${number(\n  metrics.invoices_review_required\n)}\n\nFailed Invoices: ${number(\n  metrics.invoices_failed\n)}\n\nAnomalies Detected: ${number(\n  metrics.anomalies_detected\n)}\n\nHigh-Risk Anomalies: ${number(\n  metrics.high_risk_anomalies\n)}\n\nEstimated Financial Impact:\n${money(\n  metrics.estimated_financial_impact\n)}\n\n==================================================\nCURRENT WORK QUEUE\n==================================================\n\nPending Approvals:\n${number(\n  metrics.pending_approvals\n)}\n\nOpen Processing Errors:\n${number(\n  metrics.open_processing_errors\n)}\n\n==================================================\nHIGH-PRIORITY ANOMALIES\n==================================================\n\n${anomalySection}\n\n==================================================\nPENDING APPROVALS\n==================================================\n\n${approvalSection}\n\n==================================================\nPROCESSING ISSUES\n==================================================\n\n${errorSection}\n\n==================================================\n\nThis report was generated automatically by ProcureGuard AI.\n\nEstimated financial impact represents value requiring review\nand should not be interpreted as confirmed financial loss.\n`.trim();\n\n\n// ------------------------------------------------------------\n// 12. Final safety checks\n// ------------------------------------------------------------\n\nif (!data.email_subject) {\n  throw new Error(\n    \"Daily report email subject is missing.\"\n  );\n}\n\n\nif (\n  !emailBody ||\n  emailBody.length < 100\n) {\n  throw new Error(\n    \"Generated daily report email body is invalid.\"\n  );\n}\n\n\n// ------------------------------------------------------------\n// 13. Return current organization's email\n// ------------------------------------------------------------\n\nreturn [\n  {\n    json: {\n\n      ...data,\n\n      report_settings_id:\n        reportConfig.report_settings_id,\n\n      organization_name:\n        reportConfig.organization_name,\n\n      report_timezone:\n        reportConfig.timezone,\n\n      report_hour:\n        reportConfig.report_hour,\n\n      report_recipient:\n        reportRecipient,\n\n      email_body:\n        emailBody,\n\n      email_ready:\n        true,\n\n      report_delivery_status:\n        \"READY_TO_SEND\"\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        -64
+      ],
+      "id": "858a27d4-24fd-470d-af05-23531a711089",
+      "name": "Code - Build Daily Report Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.report_recipient }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "text",
+        "message": "={{ $json.email_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2496,
+        -160
+      ],
+      "id": "dd45607f-4a96-4075-834c-36c1bc82cb91",
+      "name": "Gmail - Send Daily Procurement Report",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    '{{ $(\"Code - Build Daily Report Email\").item.json.organization_id }}'::uuid,\n\n    'ORGANIZATION',\n\n    '{{ $(\"Code - Build Daily Report Email\").item.json.organization_id }}'::uuid,\n\n    'SEND',\n\n    'N8N',\n\n    NULL,\n\n    'DAILY_PROCUREMENT_REPORT_WORKFLOW',\n\n    'Daily procurement report was successfully sent.',\n\n    NULL,\n\n    jsonb_build_object(\n        'delivery_status',\n        'SENT'\n    ),\n\n    jsonb_build_object(\n        'report_type',\n        'DAILY_PROCUREMENT_REPORT',\n\n        'report_date',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.report_date }}',\n\n        'recipient',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.report_recipient }}',\n\n        'email_subject',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.email_subject }}',\n\n        'invoices_received',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.invoices_received }},\n\n        'invoices_processed',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.invoices_processed }},\n\n        'anomalies_detected',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.anomalies_detected }},\n\n        'high_risk_anomalies',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.high_risk_anomalies }},\n\n        'estimated_financial_impact',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.estimated_financial_impact }},\n\n        'pending_approvals',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.pending_approvals }},\n\n        'open_processing_errors',\n        {{ $(\"Code - Build Daily Report Email\").item.json.metrics.open_processing_errors }},\n\n        'email_sent',\n        true\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    action,\n    actor_type,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2720,
+        -64
+      ],
+      "id": "0753b939-db7b-4b2a-ba57-0698f7fc072e",
+      "name": "DB - Log Daily Report Sent"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.processing_errors (\n    organization_id,\n    invoice_id,\n    invoice_item_id,\n    error_stage,\n    error_code,\n    error_message,\n    technical_details,\n    severity,\n    status,\n    retry_count,\n    workflow_name,\n    workflow_execution_id,\n    source_message_id,\n    context,\n    occurred_at\n)\nVALUES (\n    $1::uuid,\n\n    NULL,\n    NULL,\n\n    'NOTIFICATION',\n    'DAILY_REPORT_SEND_FAILED',\n\n    'Daily procurement report email could not be sent.',\n\n    $2::text,\n\n    'ERROR',\n    'OPEN',\n    0,\n\n    'ProcureGuard AI - Daily Procurement Report',\n\n    $3::text,\n\n    NULL,\n\n    jsonb_build_object(\n        'report_type',\n        'DAILY_PROCUREMENT_REPORT',\n\n        'report_date',\n        $4::text,\n\n        'recipient',\n        $5::text,\n\n        'email_subject',\n        $6::text,\n\n        'email_sent_confirmed',\n        false,\n\n        'failure_stage',\n        'GMAIL_SEND'\n    ),\n\n    NOW()\n)\nRETURNING\n    id AS processing_error_id,\n    organization_id,\n    error_stage,\n    error_code,\n    severity,\n    status,\n    retry_count,\n    workflow_name,\n    workflow_execution_id,\n    context,\n    occurred_at;",
+        "options": {
+          "queryReplacement": "={{ [  $(\"Code - Build Daily Report Email\").item.json.organization_id,  String(    $json.error?.message ||    $json.message ||    \"Gmail returned an error while sending the daily procurement report.\"  ),  String($execution.id),  $(\"Code - Build Daily Report Email\").item.json.report_date,  $(\"Code - Build Daily Report Email\").item.json.report_recipient,  $(\"Code - Build Daily Report Email\").item.json.email_subject] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2720,
+        -256
+      ],
+      "id": "a5622a17-8ebe-4227-8659-0f0e181ca20f",
+      "name": "DB - Record Daily Report Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    '{{ $(\"Code - Build Daily Report Email\").item.json.organization_id }}'::uuid,\n\n    'ORGANIZATION',\n\n    '{{ $(\"Code - Build Daily Report Email\").item.json.organization_id }}'::uuid,\n\n    'FAIL',\n\n    'N8N',\n\n    NULL,\n\n    'DAILY_PROCUREMENT_REPORT_WORKFLOW',\n\n    'Daily procurement report email delivery failed.',\n\n    NULL,\n\n    jsonb_build_object(\n        'delivery_status',\n        'FAILED',\n        'email_sent',\n        false\n    ),\n\n    jsonb_build_object(\n        'report_type',\n        'DAILY_PROCUREMENT_REPORT',\n\n        'report_date',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.report_date }}',\n\n        'recipient',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.report_recipient }}',\n\n        'email_subject',\n        '{{ $(\"Code - Build Daily Report Email\").item.json.email_subject }}',\n\n        'processing_error_id',\n        '{{ $json.processing_error_id }}',\n\n        'failure_stage',\n        'GMAIL_SEND',\n\n        'email_sent',\n        false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    entity_type,\n    action,\n    actor_type,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2944,
+        16
+      ],
+      "id": "003d9fbb-7f73-4f72-9bb8-86d699760f73",
+      "name": "DB - Log Daily Report Send Failure"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    '{{ $json.organization_id }}'::uuid\n        AS organization_id,\n\n    '{{ $json.report_date }}'\n        AS report_date,\n\n    '{{ $json.report_recipient }}'\n        AS recipient,\n\n    EXISTS (\n        SELECT 1\n\n        FROM public.audit_logs al\n\n        WHERE al.organization_id =\n              '{{ $json.organization_id }}'::uuid\n\n          AND al.source =\n              'DAILY_PROCUREMENT_REPORT_WORKFLOW'\n\n          AND al.action =\n              'SEND'\n\n          AND al.metadata->>'report_type' =\n              'DAILY_PROCUREMENT_REPORT'\n\n          AND al.metadata->>'report_date' =\n              '{{ $json.report_date }}'\n\n          AND al.metadata->>'recipient' =\n              '{{ $json.report_recipient }}'\n\n          AND al.metadata->>'email_sent' =\n              'true'\n\n    ) AS already_sent;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2048,
+        -64
+      ],
+      "id": "cc5f69b1-2e6b-41b5-ad43-cb9e7158da9f",
+      "name": "DB - Check Daily Report Already Sent"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.already_sent }}",
+                    "rightValue": false,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    },
+                    "id": "a3693722-2d74-4f86-b020-250d245e366c"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "NOT_SENT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "62a3a75f-a53b-46e1-8203-1cdf2a773342",
+                    "leftValue": "={{ $json.already_sent }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ALREADY_SENT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2272,
+        -64
+      ],
+      "id": "809169d9-9734-458a-8f50-bedfaf30ed41",
+      "name": "Switch - Daily Report Idempotency"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    ors.id AS report_settings_id,\n    ors.organization_id,\n    o.name AS organization_name,\n    ors.daily_report_enabled,\n    ors.daily_report_recipient,\n    ors.timezone,\n    ors.report_hour,\n\n    (CURRENT_TIMESTAMP AT TIME ZONE ors.timezone)\n        AS organization_local_time,\n\n    (CURRENT_TIMESTAMP AT TIME ZONE ors.timezone)::date\n        AS organization_local_date\n\nFROM public.organization_report_settings ors\n\nJOIN public.organizations o\n    ON o.id = ors.organization_id\n\nWHERE ors.daily_report_enabled = true\n  AND o.status = 'ACTIVE'\n\n  AND EXTRACT(\n        HOUR FROM\n        (CURRENT_TIMESTAMP AT TIME ZONE ors.timezone)\n      )::integer = ors.report_hour\n\nORDER BY o.name ASC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -320,
+        224
+      ],
+      "id": "b3900b45-9613-4a81-afaa-a5b59d65fd22",
+      "name": "DB - Get Report Configuration"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.audit_logs (\n    organization_id,\n    entity_type,\n    entity_id,\n    action,\n    actor_type,\n    actor_id,\n    source,\n    description,\n    old_values,\n    new_values,\n    metadata\n)\nVALUES (\n    '{{ $json.organization_id }}'::uuid,\n\n    'ORGANIZATION',\n\n    '{{ $json.organization_id }}'::uuid,\n\n    'HOLD',\n\n    'N8N',\n\n    NULL,\n\n    'DAILY_PROCUREMENT_REPORT_WORKFLOW',\n\n    'Duplicate daily procurement report delivery was skipped because the report had already been sent.',\n\n    NULL,\n\n    jsonb_build_object(\n        'delivery_status',\n        'ALREADY_SENT'\n    ),\n\n    jsonb_build_object(\n        'report_type',\n        'DAILY_PROCUREMENT_REPORT',\n\n        'report_date',\n        '{{ $json.report_date }}',\n\n        'recipient',\n        '{{ $json.recipient }}',\n\n        'duplicate_send_prevented',\n        true,\n\n        'email_sent_during_this_execution',\n        false\n    )\n)\nRETURNING\n    id AS audit_log_id,\n    organization_id,\n    action,\n    actor_type,\n    source,\n    description,\n    metadata,\n    created_at;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2496,
+        32
+      ],
+      "id": "179e68f2-1cec-4da5-9258-5d1a75c27df9",
+      "name": "DB - Log Daily Report Duplicate Skip"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -96,
+        224
+      ],
+      "id": "fb6f15be-b8ea-45f0-b48a-f2152e3700a3",
+      "name": "Loop - Organizations"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Report Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Daily Procurement Metrics": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Daily Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Daily Anomalies": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Pending Approvals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Pending Approvals": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Processing Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Processing Errors": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Procurement Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Procurement Report Data": {
+      "main": [
+        [
+          {
+            "node": "AI - Generate Executive Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Generate Executive Summary": {
+      "main": [
+        [
+          {
+            "node": "Code - Validate Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Validate Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Code - Build Daily Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Build Daily Report Email": {
+      "main": [
+        [
+          {
+            "node": "DB - Check Daily Report Already Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Send Daily Procurement Report": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Daily Report Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Record Daily Report Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Record Daily Report Error": {
+      "main": [
+        [
+          {
+            "node": "DB - Log Daily Report Send Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Check Daily Report Already Sent": {
+      "main": [
+        [
+          {
+            "node": "Switch - Daily Report Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Daily Report Idempotency": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Send Daily Procurement Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Log Daily Report Duplicate Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Report Configuration": {
+      "main": [
+        [
+          {
+            "node": "Loop - Organizations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop - Organizations": {
+      "main": [
+        [],
+        [
+          {
+            "node": "DB - Get Daily Procurement Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Daily Report Sent": {
+      "main": [
+        [
+          {
+            "node": "Loop - Organizations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Daily Report Send Failure": {
+      "main": [
+        [
+          {
+            "node": "Loop - Organizations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Daily Report Duplicate Skip": {
+      "main": [
+        [
+          {
+            "node": "Loop - Organizations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}
